@@ -429,6 +429,7 @@
 				DEVELOPMENT_TEAM = CWP2J59M9R;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VoiceFlow/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMainStoryboardFile = Main;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "VoiceFlow needs microphone access to listen to your voice for dictation.";
@@ -459,6 +460,7 @@
 				DEVELOPMENT_TEAM = CWP2J59M9R;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = VoiceFlow/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMainStoryboardFile = Main;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "VoiceFlow needs microphone access to listen to your voice for dictation.";

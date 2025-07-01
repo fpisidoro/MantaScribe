@@ -13,6 +13,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var isRecording = false
     var bufferTimer: Timer?
     var currentBuffer = ""
+    var hasProcessedBuffer = false
+    var lastProcessedText = ""
+    var lastSentenceEnded = true // Track if last sentence ended with punctuation
+    var rightOptionPressed = false // Track right option state
     
     // Target app selection
     enum TargetApp: String, CaseIterable {
@@ -38,9 +42,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenuBar()
         setupSpeechRecognition()
         
-        print("🎤 VoiceFlow Ready!")
-        print("Press Space bar to toggle dictation")
+        print("🎤 VoiceFlow Ready! (Speed Optimized)")
         print("Target: \(selectedTargetApp.displayName)")
+        print("Press Right Option key to toggle dictation")
     }
     
     func setupMenuBar() {
@@ -48,7 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarItem.button?.title = "🎤"
         
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Toggle Dictation (Space)", action: #selector(toggleDictation), keyEquivalent: " "))
+        menu.addItem(NSMenuItem(title: "Toggle Dictation (Right Option)", action: #selector(toggleDictation), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         
         // Target app submenu
@@ -65,25 +69,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(targetMenuItem)
         
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Test Current Target", action: #selector(testCurrentTarget), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Test Dictation", action: #selector(testDictation), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "About VoiceFlow", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusBarItem.menu = menu
         
-        // Setup global hotkey monitoring
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == 49 { // Space bar
-                self.toggleDictation()
+        // Setup RIGHT OPTION with ENHANCED detection for background apps
+        NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
+            let rawFlags = event.modifierFlags.rawValue
+            
+            // Be more aggressive about detecting Right Option from background
+            if rawFlags == 524608 {
+                if !self.rightOptionPressed {
+                    self.rightOptionPressed = true
+                    print("🎤 RIGHT OPTION DETECTED FROM BACKGROUND - toggling dictation")
+                    // Add small delay to ensure event is fully processed
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        self.toggleDictation()
+                    }
+                }
+            } else if self.rightOptionPressed && rawFlags != 524608 {
+                self.rightOptionPressed = false
+                print("🎤 Right Option released from background")
             }
         }
         
-        // Local event monitor (when app has focus)
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == 49 { // Space bar
+        // Local event monitor for when app has focus
+        NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            let rawFlags = event.modifierFlags.rawValue
+            
+            if rawFlags == 524608 && !self.rightOptionPressed {
+                self.rightOptionPressed = true
+                print("🎤 RIGHT OPTION DETECTED LOCALLY - toggling dictation")
                 self.toggleDictation()
-                return nil // Consume the event
+            } else if rawFlags != 524608 && self.rightOptionPressed {
+                self.rightOptionPressed = false
             }
+            
             return event
         }
     }
@@ -103,78 +126,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    @objc func testCurrentTarget() {
-        // Force launch TextEdit first to ensure it's running
-        launchApp(selectedTargetApp)
-        
-        // Wait a moment for launch, then test
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            self.sendTextToApp("Test message from VoiceFlow - \(Date())")
-        }
+    @objc func testDictation() {
+        sendText("Test from VoiceFlow - \(Date())")
     }
     
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "VoiceFlow"
-        alert.informativeText = "Background dictation for professionals.\n\nTarget: \(selectedTargetApp.displayName)\nPress Space to dictate while focused on other apps."
+        alert.informativeText = "Professional background dictation for macOS.\n\nTarget: \(selectedTargetApp.displayName)\n\nPress Right Option to dictate while focused on other apps.\n\nCreated for medical professionals, analysts, and researchers who need to document findings while examining visual data."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
     
     func setupSpeechRecognition() {
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        
-        // Check if speech recognizer is available
-        guard let speechRecognizer = speechRecognizer else {
-            print("❌ Speech recognizer not available for locale en-US")
-            return
-        }
-        
-        // Set delegate to monitor availability changes
-        speechRecognizer.delegate = self
+        speechRecognizer?.delegate = self
         
         SFSpeechRecognizer.requestAuthorization { [weak self] authStatus in
             DispatchQueue.main.async {
                 switch authStatus {
                 case .authorized:
                     print("✅ Speech recognition authorized")
-                    self?.checkDictationSetup()
                 case .denied:
-                    print("❌ Speech recognition authorization denied")
-                    self?.showSpeechPermissionAlert()
+                    print("❌ Speech recognition denied - check Settings > Privacy & Security > Speech Recognition")
                 case .restricted:
                     print("⚠️ Speech recognition restricted on this device")
                 case .notDetermined:
-                    print("⏳ Speech recognition not yet authorized")
+                    print("⏳ Speech recognition permission pending")
                 @unknown default:
-                    print("❓ Unknown authorization status")
+                    print("❓ Unknown speech recognition status")
                 }
             }
-        }
-    }
-    
-    func checkDictationSetup() {
-        print("ℹ️ For best results, ensure:")
-        print("   1. System Preferences > Keyboard > Dictation is ON")
-        print("   2. Language is set to English (US)")
-        print("   3. Enhanced Dictation is enabled for offline use")
-    }
-    
-    func showSpeechPermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Speech Recognition Permission Required"
-        alert.informativeText = """
-        VoiceFlow needs permission to use speech recognition.
-        
-        Please grant permission in:
-        System Preferences > Security & Privacy > Privacy > Speech Recognition
-        """
-        alert.addButton(withTitle: "Open System Preferences")
-        alert.addButton(withTitle: "OK")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")!)
         }
     }
     
@@ -189,48 +171,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func startDictation() {
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
             print("❌ Speech recognizer not available")
-            showDictationSetupAlert()
             return
         }
         
-        print("🎙️ Starting dictation to \(selectedTargetApp.displayName)...")
+        print("🎙️ Starting dictation...")
         
-        // Audio feedback
         playSound("Glass")
         updateStatus(.listening)
         
-        // Cancel previous task if running
+        // Reset buffer state
+        currentBuffer = ""
+        hasProcessedBuffer = false
+        lastProcessedText = ""
+        lastSentenceEnded = true // Start fresh - first word should be capitalized
+        
+        // Clean up previous session
         recognitionTask?.cancel()
         recognitionTask = nil
         
-        // Stop audio engine if running
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
         }
         
-        // Create recognition request with on-device processing
+        // Create recognition request
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
-            print("❌ Unable to create recognition request")
-            showError("Unable to create recognition request")
+            print("❌ Failed to create recognition request")
             return
         }
         
         recognitionRequest.shouldReportPartialResults = true
-        // Try to use on-device recognition to avoid server issues
         if #available(macOS 13.0, *) {
             recognitionRequest.requiresOnDeviceRecognition = true
         }
         
-        // Configure audio engine
+        // OPTIMIZED AUDIO SETUP - smaller buffer for lower latency
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        // Remove any existing tap first
         inputNode.removeTap(onBus: 0)
-        
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+        // Reduced buffer size: 512 instead of 1024 for faster processing
+        inputNode.installTap(onBus: 0, bufferSize: 512, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
         
@@ -238,58 +220,75 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         do {
             try audioEngine.start()
-            print("✅ Audio engine started successfully")
         } catch {
-            print("❌ Audio engine failed to start: \(error)")
-            showMicrophoneAlert()
+            print("❌ Audio engine failed: \(error)")
+            updateStatus(.error)
             return
         }
         
-        // Start recognition task with improved error handling
+        // OPTIMIZED RECOGNITION with confidence-based timing
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self = self else { return }
             
             if let result = result {
-                let transcribedText = result.bestTranscription.formattedString
-                let confidence = result.bestTranscription.segments.last?.confidence ?? 0.0
+                let text = result.bestTranscription.formattedString
                 
-                if !result.isFinal {
-                    // Update buffer and reset timer
-                    self.currentBuffer = transcribedText
-                    self.bufferTimer?.invalidate()
-                    
-                    // Show processing status
+                // Calculate confidence from available segments
+                let confidence = self.calculateConfidence(from: result.bestTranscription)
+                
+                if result.isFinal {
+                    // Final result - process immediately
                     DispatchQueue.main.async {
-                        self.updateStatus(.processing)
-                    }
-                    
-                    // Adaptive timeout based on confidence and sentence structure
-                    let timeout = self.calculateBufferTimeout(text: transcribedText, confidence: confidence)
-                    
-                    self.bufferTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { _ in
-                        DispatchQueue.main.async {
+                        self.bufferTimer?.invalidate()
+                        if !self.hasProcessedBuffer && !text.isEmpty {
+                            self.currentBuffer = text
                             self.flushBuffer()
                         }
                     }
                 } else {
-                    // Final result - flush immediately
-                    DispatchQueue.main.async {
-                        self.currentBuffer = transcribedText
-                        self.flushBuffer()
+                    // Partial result with CONFIDENCE-BASED early flushing
+                    if !self.hasProcessedBuffer && !text.isEmpty {
+                        self.currentBuffer = text
+                        
+                        DispatchQueue.main.async {
+                            self.updateStatus(.processing)
+                        }
+                        
+                        self.bufferTimer?.invalidate()
+                        
+                        // SPEED IMPROVEMENT: Dynamic timeout based on confidence and content
+                        var timeout: TimeInterval
+                        
+                        if confidence > 0.9 && (text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?")) {
+                            timeout = 0.3 // Very confident punctuation = fast flush
+                        } else if confidence > 0.8 {
+                            timeout = 0.8 // High confidence = medium speed
+                        } else if text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?") {
+                            timeout = 1.0 // Punctuation ending
+                        } else if self.isProbablyComplete(text) {
+                            timeout = 1.2 // Seems complete based on content
+                        } else {
+                            timeout = 1.5 // Default for uncertain text
+                        }
+                        
+                        print("🧠 Confidence: \(String(format: "%.2f", confidence)), Timeout: \(timeout)s")
+                        
+                        self.bufferTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+                            DispatchQueue.main.async {
+                                guard let self = self else { return }
+                                if !self.hasProcessedBuffer && self.isRecording && !self.currentBuffer.isEmpty {
+                                    self.flushBuffer()
+                                }
+                            }
+                        }
                     }
                 }
             }
             
             if let error = error {
-                let nsError = error as NSError
-                let errorCode = nsError.code
-                let errorDomain = nsError.domain
-                
                 print("❌ Recognition error: \(error.localizedDescription)")
-                print("   Domain: \(errorDomain), Code: \(errorCode)")
-                
                 DispatchQueue.main.async {
-                    self.handleRecognitionError(errorCode, domain: errorDomain)
+                    self.stopDictation()
                 }
             }
         }
@@ -297,120 +296,208 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isRecording = true
     }
     
-    func handleRecognitionError(_ errorCode: Int, domain: String) {
-        if domain == "kAFAssistantErrorDomain" {
-            switch errorCode {
-            case 1101:
-                // Dictation service setup issue
-                showDictationSetupAlert()
-            case 1107:
-                // No speech detected - this is normal, just continue
-                print("ℹ️ No speech detected, continuing...")
-                return
-            case 203:
-                // Timeout or rate limiting
-                showError("Speech recognition timeout. Please try again.")
-            case 216:
-                // Locale/language issue
-                showError("Language setup issue. Check dictation language settings.")
-            default:
-                showError("Speech recognition error (\(errorCode))")
-            }
-        } else {
-            showError("Recognition failed")
-        }
-        
-        stopDictation()
-    }
-    
-    func showDictationSetupAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Dictation Setup Required"
-        alert.informativeText = """
-        VoiceFlow requires dictation to be properly configured:
-        
-        1. Open System Preferences > Keyboard
-        2. Turn ON "Enable Dictation"
-        3. Set language to "English (United States)"
-        4. Enable "Use Enhanced Dictation" for offline use
-        5. Restart VoiceFlow after making changes
-        
-        This ensures reliable speech recognition.
-        """
-        alert.addButton(withTitle: "Open Keyboard Settings")
-        alert.addButton(withTitle: "OK")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.keyboard")!)
-        }
-    }
-    
-    func showMicrophoneAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Microphone Access Required"
-        alert.informativeText = """
-        VoiceFlow needs microphone access for speech recognition.
-        
-        Please grant permission in:
-        System Preferences > Security & Privacy > Privacy > Microphone
-        
-        Add VoiceFlow to the list and check the box.
-        """
-        alert.addButton(withTitle: "Open Privacy Settings")
-        alert.addButton(withTitle: "OK")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
-        }
-    }
-    
-    func calculateBufferTimeout(text: String, confidence: Float) -> TimeInterval {
-        // Base timeout
-        var timeout = 2.0
-        
-        // Extend timeout for sentence endings
-        if text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?") {
-            timeout = 1.0 // Shorter for completed sentences
-        }
-        
-        // Adjust for confidence
-        if confidence < 0.5 {
-            timeout += 0.5 // Wait longer for uncertain text
-        }
-        
-        return timeout
-    }
-    
     func flushBuffer() {
-        guard !currentBuffer.isEmpty else { return }
+        guard !currentBuffer.isEmpty && !hasProcessedBuffer else { return }
         
-        print("📝 Sending to \(selectedTargetApp.displayName): \(currentBuffer)")
+        // SPEED IMPROVEMENT: Immediate visual feedback
+        updateStatus(.sending)
         
-        // Audio feedback and visual update
+        let processedText = processPunctuationCommands(currentBuffer)
+        
+        if isPunctuationDuplicate(processedText) {
+            print("🔄 Skipping duplicate punctuation: '\(processedText)'")
+            hasProcessedBuffer = true
+            updateStatus(.listening)
+            return
+        }
+        
+        // Handle capitalization based on sentence continuation
+        let finalText = handleContinuationCapitalization(processedText)
+        
+        hasProcessedBuffer = true
+        print("📝 Sending: \(finalText)")
+        lastProcessedText = finalText
+        
+        // Update sentence state - check if this text ends with punctuation
+        lastSentenceEnded = finalText.hasSuffix(".") || finalText.hasSuffix("!") || finalText.hasSuffix("?") || finalText.hasSuffix(":") || finalText.hasSuffix(";")
+        
+        // SPEED IMPROVEMENT: Audio feedback is async, don't wait
         playSound("Purr")
-        updateStatus(.success)
         
-        // Send to selected app
-        sendTextToApp(currentBuffer)
-        
-        // Clear buffer
         currentBuffer = ""
         bufferTimer?.invalidate()
         
-        // Reset status after brief success indication
+        // Send immediately
+        sendText(finalText)
+        
+        // Faster reset for next sentence
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            self.hasProcessedBuffer = false
             if !self.isRecording {
                 self.updateStatus(.ready)
+            } else {
+                self.updateStatus(.listening)
             }
         }
+    }
+    
+    // Process punctuation commands with context awareness
+    func processPunctuationCommands(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let lowercased = trimmed.lowercased()
+        
+        // Handle punctuation commands ONLY if they're standalone
+        let words = trimmed.split(separator: " ")
+        
+        // Only process as punctuation if it's a single word command
+        if words.count == 1 {
+            switch lowercased {
+            case "period", "full stop":
+                return "."
+            case "comma":
+                return ","
+            case "question mark":
+                return "?"
+            case "exclamation point", "exclamation mark":
+                return "!"
+            case "colon":
+                return ":"
+            case "semicolon":
+                return ";"
+            default:
+                return text
+            }
+        } else {
+            // Multi-word phrases - check if it ends with punctuation command
+            if lowercased.hasSuffix(" period") {
+                let baseText = String(trimmed.dropLast(7)) // Remove " period"
+                return baseText + "."
+            }
+            if lowercased.hasSuffix(" comma") {
+                let baseText = String(trimmed.dropLast(6)) // Remove " comma"
+                return baseText + ","
+            }
+            if lowercased.hasSuffix(" question mark") {
+                let baseText = String(trimmed.dropLast(14)) // Remove " question mark"
+                return baseText + "?"
+            }
+            if lowercased.hasSuffix(" exclamation point") || lowercased.hasSuffix(" exclamation mark") {
+                let suffixLength = lowercased.hasSuffix(" exclamation point") ? 18 : 16
+                let baseText = String(trimmed.dropLast(suffixLength))
+                return baseText + "!"
+            }
+            
+            return text
+        }
+    }
+    
+    // Check if this punctuation was just sent
+    func isPunctuationDuplicate(_ text: String) -> Bool {
+        let punctuation = [".", ",", "?", "!", ":", ";"]
+        
+        // If current text is punctuation and matches last processed
+        if punctuation.contains(text) && text == lastProcessedText {
+            return true
+        }
+        
+        // Also check if we just sent this punctuation within the last few characters
+        if punctuation.contains(text) && lastProcessedText.hasSuffix(text) {
+            return true
+        }
+        
+        return false
+    }
+    
+    // Handle capitalization for sentence continuation
+    func handleContinuationCapitalization(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return text }
+        
+        // If last sentence ended with punctuation, keep original capitalization
+        if lastSentenceEnded {
+            return trimmed
+        }
+        
+        // If continuing mid-sentence, check if first word should be lowercase
+        let words = trimmed.split(separator: " ")
+        guard let firstWord = words.first else { return trimmed }
+        
+        let firstWordString = String(firstWord)
+        let lowercaseFirstWord = firstWordString.lowercased()
+        
+        // Words that should typically be lowercase mid-sentence
+        let midSentenceWords = [
+            "for", "but", "and", "or", "so", "yet", "nor",
+            "with", "without", "about", "after", "before", "during",
+            "in", "on", "at", "by", "from", "to", "of", "the",
+            "a", "an", "this", "that", "these", "those",
+            "he", "she", "it", "they", "we", "you", "his", "her",
+            "then", "when", "where", "while", "since", "because"
+        ]
+        
+        // If the first word is typically lowercase mid-sentence, convert it
+        if midSentenceWords.contains(lowercaseFirstWord) {
+            let lowercaseFirst = lowercaseFirstWord + trimmed.dropFirst(firstWordString.count)
+            print("🔤 Capitalization fix: '\(trimmed)' → '\(lowercaseFirst)'")
+            return lowercaseFirst
+        }
+        
+        // Keep original capitalization for proper nouns, medical terms, etc.
+        return trimmed
+    }
+    
+    // Calculate confidence from transcription segments
+    func calculateConfidence(from transcription: SFTranscription) -> Float {
+        let segments = transcription.segments
+        guard !segments.isEmpty else { return 0.0 }
+        
+        // Average confidence across all segments
+        let totalConfidence = segments.reduce(0.0) { $0 + $1.confidence }
+        return totalConfidence / Float(segments.count)
+    }
+    
+    // Smart completion detection based on content patterns
+    func isProbablyComplete(_ text: String) -> Bool {
+        let lowercased = text.lowercased()
+        
+        // Medical/professional phrase patterns that often indicate completion
+        let completionPatterns = [
+            "years old",
+            "was normal",
+            "was abnormal",
+            "follow up",
+            "discharged",
+            "admitted",
+            "prescribed",
+            "advised",
+            "recommended",
+            "working",
+            "not working"
+        ]
+        
+        // Check if text ends with any completion patterns
+        for pattern in completionPatterns {
+            if lowercased.hasSuffix(pattern) {
+                return true
+            }
+        }
+        
+        // Check for common sentence structures
+        if lowercased.contains(" and ") && text.count > 20 {
+            return true // Longer sentences with "and" are often complete thoughts
+        }
+        
+        return false
     }
     
     func stopDictation() {
         print("⏹️ Stopping dictation")
         
-        // Stop audio engine safely
+        // IMPORTANT: Clear buffer state FIRST to prevent re-processing
+        let hadBuffer = !currentBuffer.isEmpty && !hasProcessedBuffer
+        currentBuffer = ""  // Clear immediately
+        hasProcessedBuffer = true  // Prevent any processing
+        
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
@@ -422,18 +509,106 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         recognitionRequest = nil
         recognitionTask = nil
         isRecording = false
-        
         bufferTimer?.invalidate()
+        
         updateStatus(.ready)
         
-        // Flush any remaining buffer
-        if !currentBuffer.isEmpty {
-            flushBuffer()
+        // Only flush if there was actually unprocessed content AND we want to send it
+        // For now, let's NOT auto-send on stop to prevent the duplication issue
+        if hadBuffer {
+            print("🗑️ Discarded unprocessed buffer to prevent duplication")
+        }
+        
+        // Reset for next session
+        hasProcessedBuffer = false
+    }
+    
+    // ENHANCED TEXT SENDING with forced app activation
+    func sendText(_ text: String) {
+        // Smart spacing: don't add space before punctuation
+        let isPunctuation = [".", ",", "?", "!", ":", ";"].contains(text)
+        let textWithSpace = isPunctuation ? text : " " + text
+        
+        print("🎯 ATTEMPTING TO SEND: '\(textWithSpace)' to \(selectedTargetApp.displayName)")
+        
+        // Copy to clipboard
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(textWithSpace, forType: .string)
+        print("📋 Clipboard set successfully")
+        
+        // ENHANCED: Multiple activation methods
+        let bundleId = selectedTargetApp.bundleId
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+        print("🔍 Found \(runningApps.count) instances of \(selectedTargetApp.displayName)")
+        
+        if let app = runningApps.first {
+            print("📱 App is running, trying multiple activation methods...")
+            
+            // Method 1: Try standard activation
+            let success1 = app.activate(options: [.activateIgnoringOtherApps])
+            print("✅ Standard activation result: \(success1)")
+            
+            // Method 2: Try with all windows
+            let success2 = app.activate(options: [.activateAllWindows])
+            print("✅ All windows activation result: \(success2)")
+            
+            // Method 3: Force using NSWorkspace
+            NSWorkspace.shared.launchApplication(withBundleIdentifier: bundleId,
+                                               options: [.default],
+                                               additionalEventParamDescriptor: nil,
+                                               launchIdentifier: nil)
+            print("✅ NSWorkspace activation attempted")
+            
+            // Wait longer and try paste
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                print("📝 Sending Cmd+V...")
+                self.simulatePaste()
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.updateStatus(.success)
+                    print("✅ Paste operation completed")
+                }
+            }
+            
+        } else {
+            print("🚀 App not running, launching...")
+            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+                do {
+                    try NSWorkspace.shared.launchApplication(at: appURL, options: [.default], configuration: [:])
+                    print("✅ App launched")
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        print("📝 Sending Cmd+V to new app...")
+                        self.simulatePaste()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            self.updateStatus(.success)
+                        }
+                    }
+                } catch {
+                    print("❌ Failed to launch app: \(error)")
+                    updateStatus(.error)
+                }
+            }
         }
     }
     
+    func simulatePaste() {
+        // Create Cmd+V key events
+        let cmdVDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: true)
+        let cmdVUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: false)
+        
+        cmdVDown?.flags = .maskCommand
+        cmdVUp?.flags = .maskCommand
+        
+        // Send the paste command
+        cmdVDown?.post(tap: .cghidEventTap)
+        cmdVUp?.post(tap: .cghidEventTap)
+    }
+    
+    // ENHANCED STATUS with new sending state
     enum Status {
-        case ready, listening, processing, success, error
+        case ready, listening, processing, sending, success, error
     }
     
     func updateStatus(_ status: Status) {
@@ -445,15 +620,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func statusInfo(for status: Status) -> (String, String) {
         switch status {
         case .ready:
-            return ("🎤", "Toggle Dictation (Space)")
+            return ("🎤", "Toggle Dictation (Right Option)")
         case .listening:
-            return ("🔴", "Stop Dictation (Space)")
+            return ("🔴", "Stop Dictation (Right Option)")
         case .processing:
             return ("⚡", "Processing...")
+        case .sending:
+            return ("📤", "Sending...")
         case .success:
             return ("✅", "Sent!")
         case .error:
-            return ("❌", "Error - Try Again")
+            return ("❌", "Error")
         }
     }
     
@@ -463,293 +640,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             sound.play()
         }
     }
-    
-    func showError(_ message: String) {
-        updateStatus(.error)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            self.updateStatus(.ready)
-        }
-    }
-    
-    func sendTextToApp(_ text: String) {
-        // Check if target app is running, launch if needed
-        if !isAppRunning(selectedTargetApp) {
-            launchApp(selectedTargetApp)
-            // Give app time to launch
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.executeAppleScript(text)
-            }
-        } else {
-            executeAppleScript(text)
-        }
-    }
-    
-    func isAppRunning(_ app: TargetApp) -> Bool {
-        let runningApps = NSWorkspace.shared.runningApplications
-        return runningApps.contains { $0.bundleIdentifier == app.bundleId }
-    }
-    
-    func launchApp(_ app: TargetApp) {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleId) {
-            do {
-                try NSWorkspace.shared.launchApplication(at: appURL,
-                                                       options: [.withoutActivation],
-                                                       configuration: [:])
-                print("📱 Launched \(app.displayName)")
-            } catch {
-                print("❌ Failed to launch \(app.displayName): \(error)")
-            }
-        }
-    }
-    
-    func executeAppleScript(_ text: String) {
-        let script = createAppleScriptForApp(selectedTargetApp, text: text)
-        
-        print("🔧 Executing AppleScript for \(selectedTargetApp.displayName)")
-        print("📝 Script content preview: tell application \"\(selectedTargetApp.rawValue)\"...")
-        
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: script) {
-            let result = scriptObject.executeAndReturnError(&error)
-            if let error = error {
-                let errorCode = error["NSAppleScriptErrorNumber"] as? Int ?? 0
-                print("❌ AppleScript error \(errorCode): \(error)")
-                handleAppleScriptError(errorCode, error: error)
-            } else {
-                print("✅ Text successfully sent to \(selectedTargetApp.displayName)")
-                print("📊 AppleScript result: \(result.stringValue ?? "no result")")
-            }
-        } else {
-            print("❌ Failed to create AppleScript object")
-        }
-    }
-    
-    func handleAppleScriptError(_ errorCode: Int, error: NSDictionary) {
-        switch errorCode {
-        case -1743:
-            // Not authorized to send Apple events
-            showAutomationPermissionAlert()
-        case -10003:
-            // Access not allowed - specific app permission needed
-            showAppControlPermissionAlert()
-        case -1719:
-            // Assistive access required
-            showAccessibilityAlert()
-        case -10810:
-            // Application not running
-            print("📱 App not running, attempting to launch...")
-            launchApp(selectedTargetApp)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.executeAppleScript(self.currentBuffer)
-            }
-        default:
-            print("❌ AppleScript error \(errorCode): \(error)")
-            showError("Script error: \(errorCode)")
-        }
-    }
-    
-    func showAutomationPermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Automation Permission Required"
-        alert.informativeText = """
-        VoiceFlow needs permission to send text to \(selectedTargetApp.displayName).
-        
-        Steps to fix:
-        1. Open System Preferences > Security & Privacy
-        2. Click Privacy tab > Automation
-        3. Find VoiceFlow in the list
-        4. Check the box next to \(selectedTargetApp.displayName)
-        
-        If VoiceFlow doesn't appear, try dictating again first.
-        """
-        alert.addButton(withTitle: "Open System Preferences")
-        alert.addButton(withTitle: "OK")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
-        }
-    }
-    
-    func showAppControlPermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "App Control Permission Required"
-        alert.informativeText = """
-        VoiceFlow needs permission to control \(selectedTargetApp.displayName).
-        
-        This error (-10003) means automation permission is required.
-        
-        Steps to fix:
-        1. Open System Preferences > Security & Privacy
-        2. Go to Privacy tab > Automation
-        3. Look for VoiceFlow and check \(selectedTargetApp.displayName)
-        4. If VoiceFlow isn't listed, try dictating once more to trigger the permission request
-        
-        You may also need to restart \(selectedTargetApp.displayName) after granting permission.
-        """
-        alert.addButton(withTitle: "Open System Preferences")
-        alert.addButton(withTitle: "Restart \(selectedTargetApp.displayName)")
-        alert.addButton(withTitle: "OK")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
-        } else if response == .alertSecondButtonReturn {
-            restartTargetApp()
-        }
-    }
-    
-    func showAccessibilityAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Accessibility Permission Required"
-        alert.informativeText = """
-        VoiceFlow needs Accessibility permissions to control other applications.
-        
-        1. Open System Preferences > Security & Privacy
-        2. Go to Privacy tab > Accessibility
-        3. Add VoiceFlow to the list and check the box
-        
-        Then try dictating again.
-        """
-        alert.addButton(withTitle: "Open System Preferences")
-        alert.addButton(withTitle: "OK")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-        }
-    }
-    
-    func restartTargetApp() {
-        // Quit the target app
-        let quitScript = """
-        tell application "\(selectedTargetApp.rawValue)"
-            quit
-        end tell
-        """
-        
-        if let scriptObject = NSAppleScript(source: quitScript) {
-            var error: NSDictionary?
-            scriptObject.executeAndReturnError(&error)
-        }
-        
-        // Wait a moment then relaunch
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.launchApp(self.selectedTargetApp)
-        }
-    }
-    
-    func createAppleScriptForApp(_ app: TargetApp, text: String) -> String {
-        // Escape quotes and backslashes in text
-        let escapedText = text
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        
-        switch app {
-        case .textEdit:
-            return """
-            tell application "TextEdit"
-                try
-                    if not (exists document 1) then
-                        make new document
-                    end if
-                    tell front document
-                        set current_text to get text
-                        if current_text is not "" and not (current_text ends with " ") and not (current_text ends with "\\n") then
-                            set text to current_text & " " & "\(escapedText)"
-                        else
-                            set text to current_text & "\(escapedText)"
-                        end if
-                    end tell
-                on error errMsg number errNum
-                    error "TextEdit control failed: " & errMsg number errNum
-                end try
-            end tell
-            """
-            
-        case .pages:
-            return """
-            tell application "Pages"
-                try
-                    if not (exists document 1) then
-                        make new document
-                    end if
-                    tell front document
-                        set current_text to body text
-                        if current_text is not "" and not (current_text ends with " ") then
-                            set body text to current_text & " " & "\(escapedText)"
-                        else
-                            set body text to current_text & "\(escapedText)"
-                        end if
-                    end tell
-                on error errMsg number errNum
-                    error "Pages control failed: " & errMsg number errNum
-                end try
-            end tell
-            """
-            
-        case .notes:
-            return """
-            tell application "Notes"
-                try
-                    if not (exists note 1) then
-                        make new note
-                    end if
-                    tell note 1
-                        set current_body to body
-                        if current_body is not "" and not (current_body ends with " ") then
-                            set body to current_body & " " & "\(escapedText)"
-                        else
-                            set body to current_body & "\(escapedText)"
-                        end if
-                    end tell
-                on error errMsg number errNum
-                    error "Notes control failed: " & errMsg number errNum
-                end try
-            end tell
-            """
-            
-        case .word:
-            return """
-            tell application "Microsoft Word"
-                try
-                    if not (exists document 1) then
-                        make new document
-                    end if
-                    tell active document
-                        set current_content to content of text object
-                        if current_content is not "" and not (current_content ends with " ") then
-                            set content of text object to current_content & " " & "\(escapedText)"
-                        else
-                            set content of text object to current_content & "\(escapedText)"
-                        end if
-                    end tell
-                on error errMsg number errNum
-                    error "Word control failed: " & errMsg number errNum
-                end try
-            end tell
-            """
-        }
-    }
 }
 
 // MARK: - SFSpeechRecognizerDelegate
 extension AppDelegate: SFSpeechRecognizerDelegate {
     func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
         DispatchQueue.main.async {
-            if available {
-                print("✅ Speech recognizer became available")
-            } else {
-                print("❌ Speech recognizer became unavailable")
-                if self.isRecording {
-                    self.stopDictation()
-                }
+            if !available && self.isRecording {
+                self.stopDictation()
             }
         }
     }
 }
 
-// Make sure the app doesn't terminate when all windows are closed
+// Prevent app termination when no windows
 extension AppDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
