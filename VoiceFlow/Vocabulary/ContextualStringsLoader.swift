@@ -34,7 +34,7 @@ class ContextualStringsLoader {
         // Try multiple possible vocabulary files in order of preference
         let possibleFiles = [
             "optimized_medical_vocabulary",
-            "medical_contextual_strings", 
+            "medical_contextual_strings",
             "contextual_strings",
             "vocabularies"
         ]
@@ -122,7 +122,9 @@ class ContextualStringsLoader {
         
         for (category, terms) in legacyVocab {
             // Combine spoken and correct forms into contextual strings
-            let contextualTerms = Array(Set(terms.keys + terms.values))
+            let spokenTerms = Array(terms.keys)
+            let correctTerms = Array(terms.values)
+            let contextualTerms = Array(Set(spokenTerms + correctTerms))
             contextualData[category] = contextualTerms
         }
         

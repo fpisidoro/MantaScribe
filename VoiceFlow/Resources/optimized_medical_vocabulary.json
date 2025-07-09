@@ -815,6 +815,7 @@
       "mibg cardiac scan"
     ],
     "nuclear_medicine_pathology": [
+        "abnormality",
       "increased uptake",
       "decreased uptake",
       "absent uptake",
