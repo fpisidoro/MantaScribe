@@ -1,19 +1,22 @@
 /*
  * MantaScribe - Complete Medical Dictation App with Contextual Strings
  *
- * STATUS: ✅ PRODUCTION READY - PHASE 2 REFACTORED
+ * STATUS: ✅ PRODUCTION READY - PHASE 3 REFACTORED
  * Date: January 2025
  *
- * PHASE 2 CHANGES:
- * ✅ Extracted HotkeyManager to separate file
- * ✅ Implemented delegate pattern for hotkey events
- * ✅ Cleaned up setupMenuBar() method significantly
- * ✅ Improved separation of concerns for hotkey logic
+ * PHASE 3 CHANGES:
+ * ✅ Extracted TextProcessor for pure text processing functions
+ * ✅ Improved confidence-based timing with enhanced quality analysis
+ * ✅ Better text validation and similarity detection
+ * ✅ Enhanced punctuation command processing
  * ✅ Maintained 100% functional compatibility
+ *
+ * PREVIOUS PHASE 2 CHANGES:
+ * ✅ Extracted HotkeyManager with delegate pattern
+ * ✅ Cleaned up setupMenuBar() method significantly
  *
  * PREVIOUS PHASE 1 CHANGES:
  * ✅ Extracted VocabularyManager, ContextualStringsLoader, TextCorrections
- * ✅ Improved code organization and maintainability
  *
  * FEATURES:
  * ✅ Apple contextualStrings integration (20-30% accuracy improvement)
@@ -50,6 +53,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // PHASE 2: Extracted hotkey management
     private var hotkeyManager: HotkeyManager!
     
+    // PHASE 3: Extracted text processing
+    private var textProcessor: TextProcessor!
+    
     // Target app selection
     enum TargetApp: String, CaseIterable {
         case textEdit = "TextEdit"
@@ -74,6 +80,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         setupHotkeyManager()
+        setupTextProcessor()
         setupMenuBar()
         setupSpeechRecognition()
         
@@ -94,6 +101,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupHotkeyManager() {
         hotkeyManager = HotkeyManager()
         hotkeyManager.delegate = self
+    }
+    
+    private func setupTextProcessor() {
+        textProcessor = TextProcessor()
     }
     
     func setupMenuBar() {
@@ -367,14 +378,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             
             if let result = result {
                 let text = result.bestTranscription.formattedString
-                let confidence = self.calculateConfidence(from: result.bestTranscription)
+                
+                // PHASE 3: Enhanced quality analysis
+                let quality = self.textProcessor.analyzeTranscriptionQuality(result.bestTranscription)
                 
                 if result.isFinal {
                     DispatchQueue.main.async {
                         self.bufferTimer?.invalidate()
                         
                         if !self.hasProcessedBuffer && !text.isEmpty {
-                            if self.isSubstantiallySimilar(text, to: self.lastProcessedText) {
+                            if self.textProcessor.isSubstantiallySimilar(text, to: self.lastProcessedText) {
                                 print("🔄 Final result skipped - too similar to recent text: '\(text)'")
                             } else {
                                 self.currentBuffer = text
@@ -403,16 +416,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         
                         self.bufferTimer?.invalidate()
                         
-                        var timeout: TimeInterval
-                        if confidence > 0.9 && (text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?")) {
-                            timeout = 0.3
-                        } else if confidence > 0.8 {
-                            timeout = 0.8
-                        } else if text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?") {
-                            timeout = 1.0
-                        } else {
-                            timeout = 1.5
-                        }
+                        // PHASE 3: Use TextProcessor for intelligent timeout determination
+                        let timeout = self.textProcessor.determineProcessingTimeout(quality: quality, text: text)
+                        
+                        print("🧠 Quality: \(quality), Timeout: \(timeout)s")
                         
                         self.bufferTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
                             DispatchQueue.main.async {
@@ -451,7 +458,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Apply vocabulary corrections (now mostly fallback since contextual strings handle most cases)
         print("🔍 PROCESSING: '\(textToProcess)'")
         let vocabularyProcessed = VocabularyManager.shared.processText(textToProcess)
-        let finalText = processPunctuationCommands(vocabularyProcessed)
+        
+        // PHASE 3: Use TextProcessor for punctuation commands
+        let finalText = textProcessor.processPunctuationCommands(vocabularyProcessed)
         
         hasProcessedBuffer = true
         currentBuffer = ""
@@ -459,7 +468,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         print("📝 Final output: '\(finalText)'")
         
-        if isSubstantiallySimilar(finalText, to: lastProcessedText) {
+        // PHASE 3: Use TextProcessor for similarity detection
+        if textProcessor.isSubstantiallySimilar(finalText, to: lastProcessedText) {
             print("🔄 Skipping - too similar to recent: '\(lastProcessedText)'")
             isCurrentlyProcessing = false
             updateStatus(.listening)
@@ -514,66 +524,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         updateStatus(.ready)
         hasProcessedBuffer = false
-    }
-    
-    // MARK: - Text Processing
-    
-    func processPunctuationCommands(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        let lowercased = trimmed.lowercased()
-        let words = trimmed.split(separator: " ")
-        
-        if words.count == 1 {
-            switch lowercased {
-            case "period", "full stop":
-                return "."
-            case "comma":
-                return ","
-            case "question mark":
-                return "?"
-            case "exclamation point", "exclamation mark":
-                return "!"
-            case "colon":
-                return ":"
-            case "semicolon":
-                return ";"
-            default:
-                return text
-            }
-        }
-        
-        return text
-    }
-    
-    func calculateConfidence(from transcription: SFTranscription) -> Float {
-        let segments = transcription.segments
-        guard !segments.isEmpty else { return 0.0 }
-        
-        let totalConfidence = segments.reduce(0.0) { $0 + $1.confidence }
-        return totalConfidence / Float(segments.count)
-    }
-    
-    func isSubstantiallySimilar(_ text1: String, to text2: String) -> Bool {
-        if text1.isEmpty || text2.isEmpty {
-            return false
-        }
-        
-        let normalized1 = text1.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized2 = text2.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        if normalized1 == normalized2 {
-            return true
-        }
-        
-        let longer = normalized1.count > normalized2.count ? normalized1 : normalized2
-        let shorter = normalized1.count > normalized2.count ? normalized2 : normalized1
-        
-        if longer.contains(shorter) && shorter.count > 5 {
-            print("🔄 Similar text detected: '\(shorter)' in '\(longer)'")
-            return true
-        }
-        
-        return false
     }
     
     // MARK: - Smart Capitalization & Spacing (keeping all existing functionality)
