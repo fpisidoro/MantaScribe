@@ -1,7 +1,7 @@
 /*
- * MantaScribe - AppDelegate.swift - Phase 5 Complete
+ * MantaScribe - AppDelegate.swift - Phase 6 Complete
  *
- * REFACTORING STATUS: Phase 5 Complete - SmartText Components Integrated
+ * REFACTORING STATUS: Phase 6 Complete - DictationEngine Extracted
  *
  * COMPLETED EXTRACTIONS:
  * ✅ Phase 1: VocabularyManager
@@ -9,9 +9,9 @@
  * ✅ Phase 3: TextProcessor
  * ✅ Phase 4: AppTargetManager
  * ✅ Phase 5: SmartText Components (SpacingEngine, CapitalizationEngine, CursorDetector)
+ * ✅ Phase 6: DictationEngine (speech recognition, audio engine, buffering)
  *
  * REMAINING PHASES:
- * - Phase 6: DictationEngine extraction
  * - Phase 7: MenuBarController extraction
  * - Phase 8: Final AppDelegate cleanup
  */
@@ -23,27 +23,16 @@ import AVFoundation
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
     
-    // MARK: - UI Properties
+    // MARK: - UI Properties (Phase 7 - to be extracted)
     
     var statusBarItem: NSStatusItem!
     
-    // MARK: - Speech Recognition Properties (Phase 6 - to be extracted)
-    
-    var speechRecognizer: SFSpeechRecognizer?
-    var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    var recognitionTask: SFSpeechRecognitionTask?
-    var audioEngine = AVAudioEngine()
-    var isRecording = false
-    var bufferTimer: Timer?
-    var currentBuffer = ""
-    var hasProcessedBuffer = false
-    var isCurrentlyProcessing = false
-    
-    // MARK: - Core Components (Phases 1-4)
+    // MARK: - Core Components (Phases 1-6)
     
     private var hotkeyManager: HotkeyManager!
     private var textProcessor: TextProcessor!
     private var appTargetManager: AppTargetManager!
+    private var dictationEngine: DictationEngine!
     
     // MARK: - SmartText Components (Phase 5)
     
@@ -63,11 +52,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Lifecycle
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
-        setupHotkeyManager()
-        setupTextProcessor()
-        setupAppTargetManager()
+        setupComponents()
         setupMenuBar()
-        setupSpeechRecognition()
+        requestSpeechPermissions()
         
         print("🎤 MantaScribe Pro Ready!")
         print("Target: \(selectedTargetApp.displayName)")
@@ -83,6 +70,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // MARK: - Setup Methods
     
+    private func setupComponents() {
+        setupHotkeyManager()
+        setupTextProcessor()
+        setupAppTargetManager()
+        setupDictationEngine()
+    }
+    
     private func setupHotkeyManager() {
         hotkeyManager = HotkeyManager()
         hotkeyManager.delegate = self
@@ -95,6 +89,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupAppTargetManager() {
         appTargetManager = AppTargetManager()
     }
+    
+    private func setupDictationEngine() {
+        dictationEngine = DictationEngine()
+        dictationEngine.delegate = self
+    }
+    
+    private func requestSpeechPermissions() {
+        SFSpeechRecognizer.requestAuthorization { [weak self] authStatus in
+            DispatchQueue.main.async {
+                switch authStatus {
+                case .authorized:
+                    print("✅ Speech recognition authorized")
+                case .denied:
+                    print("❌ Speech recognition denied")
+                case .restricted:
+                    print("⚠️ Speech recognition restricted")
+                case .notDetermined:
+                    print("⏳ Speech recognition pending")
+                @unknown default:
+                    print("❓ Unknown speech recognition status")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Menu Bar Setup (Phase 7 - to be extracted)
     
     func setupMenuBar() {
         statusBarItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -176,28 +196,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarItem.menu = menu
     }
     
-    func setupSpeechRecognition() {
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        speechRecognizer?.delegate = self
-        
-        SFSpeechRecognizer.requestAuthorization { [weak self] authStatus in
-            DispatchQueue.main.async {
-                switch authStatus {
-                case .authorized:
-                    print("✅ Speech recognition authorized")
-                case .denied:
-                    print("❌ Speech recognition denied")
-                case .restricted:
-                    print("⚠️ Speech recognition restricted")
-                case .notDetermined:
-                    print("⏳ Speech recognition pending")
-                @unknown default:
-                    print("❓ Unknown speech recognition status")
-                }
-            }
-        }
-    }
-    
     // MARK: - Menu Actions
     
     @objc func selectTargetApp(_ sender: NSMenuItem) {
@@ -215,7 +213,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func testDictation() {
-        let testText = "Test from MantaScribe with enhanced SmartText processing"
+        let testText = "Test from MantaScribe with DictationEngine integration"
         processAndSendTextWithSmartComponents(testText)
     }
     
@@ -258,7 +256,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         VocabularyManager.shared.setEnabledContextualCategories(enabled)
         print("🎯 Contextual categories: \(enabled.joined(separator: ", "))")
         
-        if isRecording {
+        if dictationEngine.isDictating {
             print("⚠️ Contextual string changes will apply to next dictation session")
         }
     }
@@ -281,231 +279,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func toggleDictation() {
-        if isRecording {
-            stopDictation()
+        if dictationEngine.isDictating {
+            dictationEngine.stopDictation()
         } else {
-            startDictation()
+            dictationEngine.startDictation()
         }
     }
     
-    // MARK: - Dictation Methods (Phase 6 - to be extracted)
-    
-    func startDictation() {
-        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("❌ Speech recognizer not available")
-            return
-        }
-        
-        print("🎙️ Starting enhanced medical dictation...")
-        
-        playSound("Glass")
-        updateStatus(.listening)
-        
-        // Update hotkey manager with recording state
-        hotkeyManager.updateRecordingState(true)
-        
-        currentBuffer = ""
-        hasProcessedBuffer = false
-        isCurrentlyProcessing = false
-        
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        }
-        
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else {
-            print("❌ Failed to create recognition request")
-            return
-        }
-        
-        recognitionRequest.shouldReportPartialResults = true
-        if #available(macOS 13.0, *) {
-            recognitionRequest.requiresOnDeviceRecognition = true
-        }
-        
-        // Apply contextual strings for enhanced medical recognition
-        let contextualStrings = VocabularyManager.shared.getContextualStrings()
-        if !contextualStrings.isEmpty {
-            recognitionRequest.contextualStrings = contextualStrings
-            print("🎯 Applied \(contextualStrings.count) contextual strings for enhanced medical recognition")
-        }
-        
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-        }
-        
-        audioEngine.prepare()
-        
-        do {
-            try audioEngine.start()
-        } catch {
-            print("❌ Audio engine failed: \(error)")
-            updateStatus(.error)
-            return
-        }
-        
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            guard let self = self else { return }
-            
-            if let result = result {
-                let text = result.bestTranscription.formattedString
-                let confidence = self.calculateConfidence(from: result.bestTranscription)
-                
-                if result.isFinal {
-                    DispatchQueue.main.async {
-                        self.bufferTimer?.invalidate()
-                        
-                        if !self.hasProcessedBuffer && !text.isEmpty {
-                            if self.textProcessor.isSubstantiallySimilar(text, to: self.lastProcessedText) {
-                                print("🔄 Final result skipped - too similar to recent text: '\(text)'")
-                            } else {
-                                self.currentBuffer = text
-                                print("🎯 Final result - processing buffer: '\(text)'")
-                                
-                                self.bufferTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
-                                    DispatchQueue.main.async {
-                                        guard let self = self else { return }
-                                        if !self.hasProcessedBuffer && !self.currentBuffer.isEmpty {
-                                            self.flushBuffer()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    if !self.hasProcessedBuffer && !text.isEmpty {
-                        self.currentBuffer = text
-                        
-                        DispatchQueue.main.async {
-                            self.updateStatus(.processing)
-                        }
-                        
-                        self.bufferTimer?.invalidate()
-                        
-                        var timeout: TimeInterval
-                        if confidence > 0.9 && (text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?")) {
-                            timeout = 0.3
-                        } else if confidence > 0.8 {
-                            timeout = 0.8
-                        } else if text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?") {
-                            timeout = 1.0
-                        } else {
-                            timeout = 1.5
-                        }
-                        
-                        self.bufferTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-                            DispatchQueue.main.async {
-                                guard let self = self else { return }
-                                if !self.hasProcessedBuffer && self.isRecording && !self.currentBuffer.isEmpty {
-                                    self.flushBuffer()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            if let error = error {
-                print("❌ Recognition error: \(error.localizedDescription)")
-                DispatchQueue.main.async {
-                    self.stopDictation()
-                }
-            }
-        }
-        
-        isRecording = true
-    }
-    
-    func flushBuffer() {
-        guard !currentBuffer.isEmpty && !hasProcessedBuffer && !isCurrentlyProcessing else {
-            print("🚫 Skipping flush - already processed or processing")
-            return
-        }
-        
-        isCurrentlyProcessing = true
-        
-        let textToProcess = currentBuffer.trimmingCharacters(in: .whitespaces)
-        updateStatus(.sending)
-        
-        // Process text using TextProcessor
-        let vocabularyProcessed = VocabularyManager.shared.processText(textToProcess)
-        let processedText = textProcessor.processPunctuationCommands(vocabularyProcessed)
-        
-        hasProcessedBuffer = true
-        currentBuffer = ""
-        bufferTimer?.invalidate()
-        
-        print("📝 Final output: '\(processedText)'")
-        
-        if textProcessor.isSubstantiallySimilar(processedText, to: lastProcessedText) {
-            print("🔄 Skipping - too similar to recent: '\(lastProcessedText)'")
-            isCurrentlyProcessing = false
-            updateStatus(.listening)
-            return
-        }
-        
-        lastProcessedText = processedText
-        playSound("Purr")
-        
-        // PHASE 5: Process and send using SmartText components
-        processAndSendTextWithSmartComponents(processedText)
-        
-        isCurrentlyProcessing = false
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            self.hasProcessedBuffer = false
-            if !self.isRecording {
-                self.updateStatus(.ready)
-            } else {
-                self.updateStatus(.listening)
-            }
-        }
-    }
-    
-    func stopDictation() {
-        print("⏹️ Stopping dictation")
-        
-        // Update hotkey manager with recording state
-        hotkeyManager.updateRecordingState(false)
-        
-        if !currentBuffer.isEmpty && !hasProcessedBuffer && !isCurrentlyProcessing {
-            print("📝 Processing final buffer: '\(currentBuffer)'")
-            flushBuffer()
-        } else {
-            print("✅ No buffer to process or already handled")
-        }
-        
-        currentBuffer = ""
-        hasProcessedBuffer = true
-        isCurrentlyProcessing = false
-        
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        }
-        
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        
-        recognitionRequest = nil
-        recognitionTask = nil
-        isRecording = false
-        bufferTimer?.invalidate()
-        
-        updateStatus(.ready)
-        hasProcessedBuffer = false
-    }
-    
-    // MARK: - PHASE 5: SmartText Processing & Sending
+    // MARK: - SmartText Processing & Sending
     
     private func processAndSendTextWithSmartComponents(_ text: String) {
         print("🚨 PROCESSING TEXT WITH SMARTTEXT COMPONENTS")
@@ -514,7 +295,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         print("🎯 Sending: '\(text)' to \(selectedTargetApp.displayName)")
         
-        // PHASE 5: Use SmartText components for context analysis
+        // Use SmartText components for context analysis
         let cursorResult = cursorDetector.detectCursorContext()
         let shouldCapitalize = cursorResult.context.shouldCapitalize
         
@@ -563,14 +344,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     // MARK: - Helper Methods
-    
-    private func calculateConfidence(from transcription: SFTranscription) -> Float {
-        let segments = transcription.segments
-        guard !segments.isEmpty else { return 0.0 }
-        
-        let totalConfidence = segments.reduce(0.0) { $0 + $1.confidence }
-        return totalConfidence / Float(segments.count)
-    }
     
     private func formatCategoryName(_ category: String) -> String {
         return category
@@ -623,26 +396,78 @@ extension AppDelegate: HotkeyManagerDelegate {
     func hotkeyManager(_ manager: HotkeyManager, didDetectToggle action: HotkeyManager.HotkeyAction) {
         switch action {
         case .startDictation:
-            if !isRecording {
-                startDictation()
+            if !dictationEngine.isDictating {
+                dictationEngine.startDictation()
             } else {
-                // If already recording, this is a toggle to stop
-                stopDictation()
+                // If already dictating, this is a toggle to stop
+                dictationEngine.stopDictation()
             }
         case .stopDictation:
-            if isRecording {
-                stopDictation()
+            if dictationEngine.isDictating {
+                dictationEngine.stopDictation()
             }
         }
     }
 }
 
-// MARK: - SFSpeechRecognizerDelegate
-extension AppDelegate: SFSpeechRecognizerDelegate {
-    func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
-        DispatchQueue.main.async {
-            if !available && self.isRecording {
-                self.stopDictation()
+// MARK: - DictationEngineDelegate
+
+extension AppDelegate: DictationEngineDelegate {
+    func dictationEngine(_ engine: DictationEngine, didProcessText text: String) {
+        print("📝 DictationEngine processed text: '\(text)'")
+        
+        // Process text using TextProcessor and VocabularyManager
+        let vocabularyProcessed = VocabularyManager.shared.processText(text)
+        let finalText = textProcessor.processPunctuationCommands(vocabularyProcessed)
+        
+        print("📝 Final processed text: '\(finalText)'")
+        
+        // Check for similarity to recent text
+        if textProcessor.isSubstantiallySimilar(finalText, to: lastProcessedText) {
+            print("🔄 Skipping - too similar to recent: '\(lastProcessedText)'")
+            updateStatus(.listening)
+            return
+        }
+        
+        lastProcessedText = finalText
+        playSound("Purr")
+        
+        // Process and send using SmartText components
+        processAndSendTextWithSmartComponents(finalText)
+    }
+    
+    func dictationEngineDidStart(_ engine: DictationEngine) {
+        print("🎤 Dictation started")
+        playSound("Glass")
+        updateStatus(.listening)
+        
+        // Update hotkey manager with recording state
+        hotkeyManager.updateRecordingState(true)
+    }
+    
+    func dictationEngineDidStop(_ engine: DictationEngine) {
+        print("⏹️ Dictation stopped")
+        updateStatus(.ready)
+        
+        // Update hotkey manager with recording state
+        hotkeyManager.updateRecordingState(false)
+    }
+    
+    func dictationEngine(_ engine: DictationEngine, didEncounterError error: Error) {
+        print("❌ DictationEngine error: \(error.localizedDescription)")
+        updateStatus(.error)
+        
+        // Show user-friendly error if needed
+        if let dictationError = error as? DictationEngine.DictationError {
+            switch dictationError {
+            case .speechRecognizerUnavailable:
+                print("❌ Speech recognizer not available")
+            case .audioEngineFailure(let audioError):
+                print("❌ Audio engine failed: \(audioError)")
+            case .recognitionRequestCreationFailed:
+                print("❌ Failed to create recognition request")
+            case .recognitionTaskFailed(let taskError):
+                print("❌ Recognition task failed: \(taskError)")
             }
         }
     }
