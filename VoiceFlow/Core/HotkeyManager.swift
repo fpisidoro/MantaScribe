@@ -25,11 +25,15 @@ class HotkeyManager {
     private var isRecording = false
     private var currentMode: DictationMode = .toggle
     
+    // Push-to-talk optimization
+    private var pushToTalkStopTimer: Timer?
+    
     // Constants
     private let rightOptionRawFlag: UInt = 524608
     private let holdThresholdSeconds: TimeInterval = 0.5
     private let maxHoldTimeSeconds: TimeInterval = 10.0
     private let eventProcessingDelay: TimeInterval = 0.05
+    private let pushToTalkTailDelay: TimeInterval = 0.8  // Delay for tail word capture
     
     // MARK: - Initialization
     
@@ -42,6 +46,12 @@ class HotkeyManager {
     /// Update the recording state so hotkey manager can make intelligent decisions
     func updateRecordingState(_ recording: Bool) {
         isRecording = recording
+        
+        // Cancel any pending push-to-talk stop if recording started again
+        if recording {
+            pushToTalkStopTimer?.invalidate()
+            pushToTalkStopTimer = nil
+        }
     }
     
     /// Get the current dictation mode for external components
@@ -85,6 +95,10 @@ class HotkeyManager {
         rightOptionPressed = true
         keyPressStartTime = Date()
         
+        // Cancel any pending push-to-talk stop timer
+        pushToTalkStopTimer?.invalidate()
+        pushToTalkStopTimer = nil
+        
         let sourceDescription = source == .global ? "FROM BACKGROUND" : "LOCALLY"
         print("🎤 RIGHT OPTION PRESSED \(sourceDescription)")
         
@@ -119,11 +133,19 @@ class HotkeyManager {
         switch action {
         case .pushAndHoldStop:
             currentMode = .pushToTalk
-            print("🎤 Push-to-talk mode detected - stopping dictation")
-            DispatchQueue.main.asyncAfter(deadline: .now() + eventProcessingDelay) {
+            print("🎤 Push-to-talk mode detected - delaying stop for tail word capture")
+            
+            // CRITICAL FIX: Delay the stop signal to allow tail word capture
+            pushToTalkStopTimer = Timer.scheduledTimer(withTimeInterval: pushToTalkTailDelay, repeats: false) { [weak self] _ in
+                guard let self = self else { return }
+                
+                print("🎤 Push-to-talk delay completed - sending stop signal")
                 if self.isRecording {
-                    self.delegate?.hotkeyManager(self, didDetectAction: .stopDictation)
+                    DispatchQueue.main.async {
+                        self.delegate?.hotkeyManager(self, didDetectAction: .stopDictation)
+                    }
                 }
+                self.pushToTalkStopTimer = nil
             }
             
         case .toggleModeIgnore:
@@ -140,7 +162,7 @@ class HotkeyManager {
     private func determineReleaseAction(holdTime: TimeInterval) -> ReleaseAction {
         // Clean logic for mode determination:
         // - Quick tap (< 0.5s): Toggle mode, ignore release
-        // - Hold (0.5s - 10s) while recording: Push-to-talk mode, stop dictation
+        // - Hold (0.5s - 10s) while recording: Push-to-talk mode, stop dictation (with delay)
         // - Hold too long (> 10s): Invalid, ignore
         
         if holdTime >= holdThresholdSeconds && holdTime < maxHoldTimeSeconds && isRecording {
@@ -163,7 +185,7 @@ extension HotkeyManager {
     }
     
     private enum ReleaseAction {
-        case pushAndHoldStop    // Push-to-talk: stop dictation
+        case pushAndHoldStop    // Push-to-talk: stop dictation (with delay)
         case toggleModeIgnore   // Toggle mode: ignore release
         case invalidHold        // Too long: ignore
     }

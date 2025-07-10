@@ -360,21 +360,60 @@ class DictationEngine: NSObject {
         }
     }
     
+    // MARK: - Word-Level Incremental Text Extraction (UPDATED)
+    
     private func extractIncrementalText(_ newText: String) -> String {
-        // Handle incremental text extraction
+        // Handle incremental text extraction with word-level intelligence
         if lastProcessedText.isEmpty {
             // First text, send everything
             return newText
         }
         
-        if newText.hasPrefix(lastProcessedText) {
-            // New text extends previous text, send only the new part
-            let newPart = String(newText.dropFirst(lastProcessedText.count))
-            return newPart
+        // Split into words for smart comparison
+        let previousWords = lastProcessedText.split(separator: " ")
+        let currentWords = newText.split(separator: " ")
+        
+        print("🔍 Word extraction - Previous: \(previousWords.count) words, Current: \(currentWords.count) words")
+        
+        // Find longest common word sequence from the start
+        var commonWordCount = 0
+        let minWordCount = min(previousWords.count, currentWords.count)
+        
+        for i in 0..<minWordCount {
+            if previousWords[i] == currentWords[i] {
+                commonWordCount += 1
+            } else {
+                print("🔍 Word difference at position \(i): '\(previousWords[i])' vs '\(currentWords[i])'")
+                break
+            }
+        }
+        
+        print("🔍 Common words from start: \(commonWordCount)")
+        
+        // Determine what to send based on comparison
+        if currentWords.count > commonWordCount {
+            // We have new words beyond the common sequence
+            let newWords = Array(currentWords[commonWordCount...])
+            let result = newWords.joined(separator: " ")
+            print("📝 Sending new words: '\(result)'")
+            return result
+            
+        } else if currentWords.count == previousWords.count && commonWordCount < currentWords.count {
+            // Same number of words but some changed in the middle (revision)
+            // Don't send anything to avoid duplicates
+            print("📝 Word revision detected - skipping to avoid duplicate")
+            return ""
+            
+        } else if currentWords.count < previousWords.count {
+            // Current text is shorter - likely a recognition correction
+            // Don't send anything to avoid duplicates
+            print("📝 Text got shorter - likely recognition correction, skipping")
+            return ""
+            
         } else {
-            // Completely different text (shouldn't happen in toggle mode, but handle gracefully)
-            print("⚠️ Toggle mode: Non-incremental text detected")
-            return newText
+            // Same length, all words match - this is a true duplicate
+            print("📝 True duplicate detected - skipping")
+            return ""
         }
     }
     
@@ -385,12 +424,24 @@ class DictationEngine: NSObject {
             print("📱 Push-to-talk final result (Apple finalized): '\(text)'")
             isWaitingForFinalResult = false
             
-            // Process Apple's complete final result
-            processCompleteText(text)
+            // Process Apple's complete final result and finalize session
+            finalizePushToTalkSession(with: text)
         } else if !isWaitingForFinalResult {
             // Still accumulating during active push-to-talk
             print("📱 Push-to-talk final result accumulated: '\(text)'")
         }
+    }
+    
+    // New method to properly finalize push-to-talk sessions
+    private func finalizePushToTalkSession(with text: String) {
+        if !text.isEmpty {
+            processCompleteText(text)
+        }
+        
+        // Now do the cleanup that was deferred from stopDictation()
+        cleanupRecognition()
+        setState(.idle)
+        delegate?.dictationEngineDidStop(self)
     }
     
     private func handlePushToTalkPartialResult(text: String) {
@@ -400,21 +451,57 @@ class DictationEngine: NSObject {
     }
     
     private func handlePushToTalkStop() {
-        // Push-to-talk: Wait for Apple's final result to capture tail end
+        // Push-to-talk: Check if user is still speaking before stopping
         if !currentBuffer.isEmpty {
-            print("📝 Push-to-talk stop: Waiting for Apple's final result to capture complete speech...")
-            isWaitingForFinalResult = true
+            print("📝 Push-to-talk stop: Checking for ongoing speech...")
             
-            // Set a safety timeout in case final result doesn't come
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                if self.isWaitingForFinalResult && !self.currentBuffer.isEmpty {
-                    print("📝 Push-to-talk: Safety timeout - processing current buffer")
-                    self.isWaitingForFinalResult = false
-                    self.processCompleteText(self.currentBuffer)
+            // Get the most recent transcription segments to check speech activity
+            let wasRecentlySpeaking = checkRecentSpeechActivity()
+            
+            if wasRecentlySpeaking {
+                print("📝 Push-to-talk: Recent speech detected - delaying stop for 800ms")
+                // User was recently speaking, delay the stop to catch tail words
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    self.finalizeStopPushToTalk()
                 }
+            } else {
+                print("📝 Push-to-talk: No recent speech - stopping immediately")
+                finalizeStopPushToTalk()
             }
         } else {
             print("📝 Push-to-talk stop: No buffer to process")
+            finalizePushToTalkSession(with: "")
+        }
+    }
+    
+    private func checkRecentSpeechActivity() -> Bool {
+        // Check if there's been recent speech activity by looking at buffer changes
+        // This is a simple heuristic - if the buffer is growing, user is likely still speaking
+        let bufferLength = currentBuffer.count
+        
+        if bufferLength > 0 {
+            // If we have substantial content, assume there might be tail words
+            print("📝 Buffer analysis: \(bufferLength) characters - assuming potential tail speech")
+            return bufferLength > 10  // Threshold for "substantial content"
+        }
+        
+        return false
+    }
+    
+    private func finalizeStopPushToTalk() {
+        print("📝 Push-to-talk: Finalizing stop sequence")
+        isWaitingForFinalResult = true
+        
+        // Signal end of audio input
+        recognitionRequest?.endAudio()
+        
+        // Wait for Apple's final result
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if self.isWaitingForFinalResult && !self.currentBuffer.isEmpty {
+                print("📝 Push-to-talk: Final result timeout - processing current buffer")
+                self.isWaitingForFinalResult = false
+                self.finalizePushToTalkSession(with: self.currentBuffer)
+            }
         }
     }
     
@@ -446,12 +533,6 @@ class DictationEngine: NSObject {
             }
         }
     }
-    
-    // MARK: - Legacy Processing (Removed)
-    
-    // Removed processBuffer() - replaced with mode-specific processing:
-    // - Toggle Mode: processIncrementalText() for incremental updates
-    // - Push-to-Talk Mode: processCompleteText() for final results
     
     // MARK: - Timing Configuration
     
