@@ -1,16 +1,18 @@
 import Cocoa
 import Foundation
 
-/// Manages Right Option key detection and dual-mode hotkey functionality
-/// Supports both toggle mode (quick tap) and push-and-hold mode
+/// Manages Right Option key detection with clean mode communication to DictationEngine
+/// Determines and communicates toggle vs push-to-talk mode for optimized processing
 class HotkeyManager {
     
     // MARK: - Types
     
     enum HotkeyAction {
-        case startDictation
+        case startDictation(mode: DictationMode)
         case stopDictation
     }
+    
+    typealias DictationMode = DictationEngine.DictationMode
     
     // MARK: - Protocol
     
@@ -20,7 +22,8 @@ class HotkeyManager {
     
     private var rightOptionPressed = false
     private var keyPressStartTime: Date?
-    private var isRecording = false // Track recording state for intelligent decision making
+    private var isRecording = false
+    private var currentMode: DictationMode = .toggle
     
     // Constants
     private let rightOptionRawFlag: UInt = 524608
@@ -39,6 +42,11 @@ class HotkeyManager {
     /// Update the recording state so hotkey manager can make intelligent decisions
     func updateRecordingState(_ recording: Bool) {
         isRecording = recording
+    }
+    
+    /// Get the current dictation mode for external components
+    var dictationMode: DictationMode {
+        return currentMode
     }
     
     // MARK: - Private Methods
@@ -78,11 +86,15 @@ class HotkeyManager {
         keyPressStartTime = Date()
         
         let sourceDescription = source == .global ? "FROM BACKGROUND" : "LOCALLY"
-        print("🎤 RIGHT OPTION PRESSED \(sourceDescription) - toggling dictation")
+        print("🎤 RIGHT OPTION PRESSED \(sourceDescription)")
+        
+        // Always start in toggle mode initially
+        // Mode determination happens on release
+        currentMode = .toggle
         
         // Add small delay for background apps to ensure event is fully processed
         DispatchQueue.main.asyncAfter(deadline: .now() + eventProcessingDelay) {
-            self.delegate?.hotkeyManager(self, didDetectToggle: .startDictation)
+            self.delegate?.hotkeyManager(self, didDetectAction: .startDictation(mode: .toggle))
         }
     }
     
@@ -99,42 +111,44 @@ class HotkeyManager {
         let holdTime = Date().timeIntervalSince(startTime)
         let sourceDescription = source == .global ? "from background" : "locally"
         
-        print("🔍 DEBUG: Right Option released \(sourceDescription) - held for \(String(format: "%.2f", holdTime)) seconds")
+        print("🔍 Right Option released \(sourceDescription) - held for \(String(format: "%.2f", holdTime)) seconds")
         
-        // Determine action based on hold time and current recording state
+        // Determine what action to take based on hold time and recording state
         let action = determineReleaseAction(holdTime: holdTime)
         
         switch action {
-        case .pressAndHold:
-            print("🎤 Detected press-and-hold pattern - stopping dictation")
+        case .pushAndHoldStop:
+            currentMode = .pushToTalk
+            print("🎤 Push-to-talk mode detected - stopping dictation")
             DispatchQueue.main.asyncAfter(deadline: .now() + eventProcessingDelay) {
                 if self.isRecording {
-                    self.delegate?.hotkeyManager(self, didDetectToggle: .stopDictation)
+                    self.delegate?.hotkeyManager(self, didDetectAction: .stopDictation)
                 }
             }
             
-        case .quickTap:
-            print("🎤 Quick tap detected (held for \(String(format: "%.2f", holdTime))s) - toggle mode, ignoring release")
+        case .toggleModeIgnore:
+            currentMode = .toggle
+            print("🎤 Toggle mode - ignoring release (held for \(String(format: "%.2f", holdTime))s)")
             
-        case .tooLong:
-            print("🎤 Hold time too long (\(String(format: "%.2f", holdTime))s) - ignoring")
+        case .invalidHold:
+            print("🎤 Invalid hold time (\(String(format: "%.2f", holdTime))s) - ignoring")
         }
         
         keyPressStartTime = nil
     }
     
     private func determineReleaseAction(holdTime: TimeInterval) -> ReleaseAction {
-        // Only treat as press-and-hold if:
-        // 1. Key was held for at least the threshold time
-        // 2. Hold time is reasonable (not accidental long hold)
-        // 3. We're currently recording (otherwise it doesn't make sense to stop)
+        // Clean logic for mode determination:
+        // - Quick tap (< 0.5s): Toggle mode, ignore release
+        // - Hold (0.5s - 10s) while recording: Push-to-talk mode, stop dictation
+        // - Hold too long (> 10s): Invalid, ignore
         
         if holdTime >= holdThresholdSeconds && holdTime < maxHoldTimeSeconds && isRecording {
-            return .pressAndHold
+            return .pushAndHoldStop
         } else if holdTime >= maxHoldTimeSeconds {
-            return .tooLong
+            return .invalidHold
         } else {
-            return .quickTap
+            return .toggleModeIgnore
         }
     }
 }
@@ -142,20 +156,21 @@ class HotkeyManager {
 // MARK: - Supporting Types
 
 extension HotkeyManager {
+    
     private enum EventSource {
         case global
         case local
     }
     
     private enum ReleaseAction {
-        case pressAndHold    // Stop dictation
-        case quickTap        // Ignore (toggle mode)
-        case tooLong         // Ignore (probably accidental)
+        case pushAndHoldStop    // Push-to-talk: stop dictation
+        case toggleModeIgnore   // Toggle mode: ignore release
+        case invalidHold        // Too long: ignore
     }
 }
 
 // MARK: - Delegate Protocol
 
 protocol HotkeyManagerDelegate: AnyObject {
-    func hotkeyManager(_ manager: HotkeyManager, didDetectToggle action: HotkeyManager.HotkeyAction)
+    func hotkeyManager(_ manager: HotkeyManager, didDetectAction action: HotkeyManager.HotkeyAction)
 }

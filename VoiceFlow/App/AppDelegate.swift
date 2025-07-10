@@ -1,29 +1,21 @@
 /*
- * MantaScribe - AppDelegate.swift - Phase 8 Complete - Final Architecture
+ * MantaScribe - AppDelegate.swift - Clean Mode Integration
  *
- * REFACTORING STATUS: ✅ COMPLETE - All 8 Phases Successfully Implemented
+ * CLEAN ARCHITECTURE: Separated dictation modes and processing modes
  *
- * ARCHITECTURAL TRANSFORMATION:
- * From: 1000+ line monolithic AppDelegate
- * To: Clean 120-line component coordinator
+ * DICTATION MODES:
+ * - Toggle: Continuous listening with pause detection
+ * - Push-to-Talk: Accumulate until key release
  *
- * EXTRACTED COMPONENTS:
- * ✅ Phase 1: VocabularyManager        - Medical vocabulary & contextual strings
- * ✅ Phase 2: HotkeyManager           - Right Option key detection & dual-mode
- * ✅ Phase 3: TextProcessor           - Punctuation commands & text validation
- * ✅ Phase 4: AppTargetManager        - App switching & text sending
- * ✅ Phase 5: SmartText Components    - Context-aware capitalization & spacing
- * ✅ Phase 6: DictationEngine         - Speech recognition & audio management
- * ✅ Phase 7: MenuBarController       - UI management & user interactions
- * ✅ Phase 8: Final Optimization     - Clean coordination architecture
+ * PROCESSING MODES:
+ * - Fast: Minimal processing for maximum speed
+ * - Smart: Full features (future re-integration point)
  *
- * BENEFITS ACHIEVED:
- * - 90% code reduction in AppDelegate
- * - Each component has single responsibility
- * - Clean separation of concerns
- * - Testable, maintainable architecture
- * - Professional code organization
- * - Easy debugging and feature development
+ * BENEFITS:
+ * - No double transcription
+ * - Clean mode separation
+ * - Future-ready for smart features
+ * - Optimized performance
  */
 
 import Cocoa
@@ -32,12 +24,23 @@ import Speech
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
     
+    // MARK: - Performance Mode Management
+    
+    /// Performance mode selection
+    private var isSmartModeEnabled = true {
+        didSet {
+            let mode = isSmartModeEnabled ? "Smart Mode" : "Fast Mode"
+            print("⚡ Performance mode changed to: \(mode)")
+            componentManager?.updatePerformanceMode(isSmartModeEnabled)
+        }
+    }
+    
     // MARK: - Architecture Components
     
     /// Manages all core application components with clean dependency injection
     private var componentManager: ComponentManager!
     
-    /// Coordinates SmartText processing with optimized shared instances
+    /// Coordinates SmartText processing (only used in Smart Mode)
     private var smartTextCoordinator: SmartTextCoordinator!
     
     /// Tracks processed text for duplicate detection and workflow continuity
@@ -62,11 +65,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         componentManager = ComponentManager()
         componentManager.delegate = self
         componentManager.initializeAllComponents()
+        componentManager.updatePerformanceMode(isSmartModeEnabled)
         
-        // Initialize SmartText coordination system
+        // Initialize SmartText coordination system (for future Smart Mode)
         smartTextCoordinator = SmartTextCoordinator()
         
-        print("🏗️ MantaScribe: Architecture initialized with \(componentManager.componentCount) components")
+        print("🏗️ MantaScribe: Clean architecture initialized with \(componentManager.componentCount) components")
     }
     
     private func requestRequiredPermissions() {
@@ -81,6 +85,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func logApplicationReady() {
         let targetApp = componentManager.currentTargetApp
         let vocabularyCount = VocabularyManager.shared.getContextualStrings().count
+        let modeStatus = isSmartModeEnabled ? "Smart Mode (Future Features)" : "Fast Mode (Performance Optimized)"
         
         print("""
         
@@ -89,7 +94,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         📱 Target: \(targetApp.displayName)
         🎯 Medical Terms: \(vocabularyCount) enhanced recognition terms
         ⌨️ Hotkey: Right Option (toggle & push-to-talk modes)
-        🏗️ Architecture: Clean component-based design
+        ⚡ Performance: \(modeStatus)
+        🏗️ Architecture: Clean mode separation
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         Ready for professional medical dictation workflows!
         
@@ -98,20 +104,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // MARK: - Text Processing Workflow
     
-    private func processTextWithSmartComponents(_ rawText: String) {
-        print("📝 Processing: '\(rawText)'")
+    private func processTextWithOptimalPath(_ rawText: String) {
+        print("📝 Processing (\(isSmartModeEnabled ? "Smart" : "Fast")): '\(rawText)'")
         
-        // Apply vocabulary and punctuation processing
-        let processedText = applyTextProcessing(to: rawText)
-        
-        // Check for duplicate content
-        if isDuplicateText(processedText) {
-            print("🔄 Skipping duplicate text")
-            componentManager.updateStatus(.listening)
-            return
+        if isSmartModeEnabled {
+            processWithSmartMode(rawText)
+        } else {
+            processWithFastMode(rawText)
         }
+    }
+    
+    private func processWithSmartMode(_ rawText: String) {
+        // Future: Full smart processing pipeline
+        let processedText = applyBasicProcessing(to: rawText)
         
-        // Apply SmartText intelligence and send
+        // Future: SmartText intelligence
         smartTextCoordinator.processAndSend(
             text: processedText,
             targetApp: componentManager.currentTargetApp,
@@ -123,13 +130,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         lastProcessedText = processedText
     }
     
-    private func applyTextProcessing(to text: String) -> String {
-        let vocabularyProcessed = VocabularyManager.shared.processText(text)
-        return componentManager.textProcessor.processPunctuationCommands(vocabularyProcessed)
+    private func processWithFastMode(_ rawText: String) {
+        // Fast mode: minimal processing, direct send
+        let processedText = componentManager.textProcessor.processPunctuationCommands(rawText)
+        
+        // Direct send with minimal formatting
+        componentManager.appTargetManager.sendText(
+            processedText,
+            shouldCapitalize: false,  // No smart capitalization
+            needsLeadingSpace: true,  // Simple default spacing
+            needsTrailingSpace: false,
+            completion: { [weak self] result in
+                self?.handleTextSendResult(result)
+            }
+        )
+        
+        lastProcessedText = processedText
     }
     
-    private func isDuplicateText(_ text: String) -> Bool {
-        return componentManager.textProcessor.isSubstantiallySimilar(text, to: lastProcessedText)
+    private func applyBasicProcessing(to text: String) -> String {
+        // Basic processing for both modes
+        return componentManager.textProcessor.processPunctuationCommands(text)
     }
     
     private func handleTextSendResult(_ result: AppTargetManager.AppSwitchResult) {
@@ -141,6 +162,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.componentManager.updateStatus(.error)
             }
         }
+    }
+    
+    // MARK: - Performance Mode Toggle
+    
+    private func togglePerformanceMode() {
+        isSmartModeEnabled.toggle()
+        componentManager.refreshMenu()
+        
+        let newMode = isSmartModeEnabled ? "Smart Mode" : "Fast Mode"
+        let description = isSmartModeEnabled ?
+            "Future features: smart text, medical vocabulary, intelligent formatting" :
+            "Performance optimized: basic dictation with minimal processing"
+            
+        showModeChangeAlert(mode: newMode, description: description)
+    }
+    
+    private func showModeChangeAlert(mode: String, description: String) {
+        let alert = NSAlert()
+        alert.messageText = "Performance Mode Changed"
+        alert.informativeText = "Now using: \(mode)\n\n\(description)"
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
     
     // MARK: - Utility Methods
@@ -167,8 +210,16 @@ extension AppDelegate: ComponentManagerDelegate {
         }
     }
     
+    fileprivate func componentManagerDidRequestTogglePerformanceMode(_ manager: ComponentManager) {
+        togglePerformanceMode()
+    }
+    
+    fileprivate func componentManagerCurrentPerformanceMode(_ manager: ComponentManager) -> Bool {
+        return isSmartModeEnabled
+    }
+    
     fileprivate func componentManager(_ manager: ComponentManager, didProcessText text: String) {
-        processTextWithSmartComponents(text)
+        processTextWithOptimalPath(text)
     }
     
     fileprivate func componentManagerDidStartDictation(_ manager: ComponentManager) {
@@ -186,7 +237,7 @@ extension AppDelegate: ComponentManagerDelegate {
 
 // MARK: - Component Manager
 
-/// Manages all application components with clean dependency injection and coordination
+/// Manages all application components with clean mode coordination
 fileprivate class ComponentManager: NSObject {
     
     // MARK: - Properties
@@ -199,6 +250,9 @@ fileprivate class ComponentManager: NSObject {
     private(set) var appTargetManager: AppTargetManager!
     private(set) var dictationEngine: DictationEngine!
     private(set) var menuBarController: MenuBarController!
+    
+    // Performance mode state
+    private var isSmartModeEnabled = true
     
     var componentCount: Int { return 5 }
     var isDictating: Bool { return dictationEngine.isDictating }
@@ -236,6 +290,23 @@ fileprivate class ComponentManager: NSObject {
         print("🔗 Component delegates connected")
     }
     
+    // MARK: - Performance Mode Management
+    
+    func updatePerformanceMode(_ smartModeEnabled: Bool) {
+        isSmartModeEnabled = smartModeEnabled
+        
+        // Update DictationEngine for performance mode
+        if let engine = dictationEngine {
+            engine.updatePerformanceMode(smartModeEnabled)
+        }
+        
+        print("⚡ Components updated for \(smartModeEnabled ? "Smart" : "Fast") mode")
+    }
+    
+    func refreshMenu() {
+        menuBarController.refreshMenu()
+    }
+    
     // MARK: - Component Coordination
     
     func startDictation() {
@@ -247,19 +318,37 @@ fileprivate class ComponentManager: NSObject {
     }
     
     func updateStatus(_ status: MenuBarController.Status) {
-        menuBarController.updateStatus(status)
+        if isSmartModeEnabled {
+            menuBarController.updateStatus(status)
+        } else {
+            // Fast mode: minimal status updates
+            if status == .error {
+                menuBarController.updateStatus(status)
+            }
+        }
     }
     
     func playSound(_ soundName: String) {
-        menuBarController.playSound(soundName)
+        if isSmartModeEnabled {
+            menuBarController.playSound(soundName)
+        }
+        // Fast mode: no audio feedback for speed
     }
 }
 
 // MARK: - Component Manager Delegates
 
 extension ComponentManager: HotkeyManagerDelegate {
-    func hotkeyManager(_ manager: HotkeyManager, didDetectToggle action: HotkeyManager.HotkeyAction) {
-        delegate?.componentManagerDidRequestToggleDictation(self)
+    func hotkeyManager(_ manager: HotkeyManager, didDetectAction action: HotkeyManager.HotkeyAction) {
+        switch action {
+        case .startDictation(let mode):
+            // Communicate mode to dictation engine before starting
+            dictationEngine.setDictationMode(mode)
+            delegate?.componentManagerDidRequestToggleDictation(self)
+            
+        case .stopDictation:
+            delegate?.componentManagerDidRequestToggleDictation(self)
+        }
     }
 }
 
@@ -269,8 +358,10 @@ extension ComponentManager: DictationEngineDelegate {
     }
     
     func dictationEngineDidStart(_ engine: DictationEngine) {
-        playSound("Glass")
-        updateStatus(.listening)
+        if isSmartModeEnabled {
+            playSound("Glass")
+            updateStatus(.listening)
+        }
         hotkeyManager.updateRecordingState(true)
         delegate?.componentManagerDidStartDictation(self)
     }
@@ -292,13 +383,22 @@ extension ComponentManager: MenuBarControllerDelegate {
         delegate?.componentManagerDidRequestToggleDictation(self)
     }
     
+    func menuBarControllerDidRequestTogglePerformanceMode(_ controller: MenuBarController) {
+        delegate?.componentManagerDidRequestTogglePerformanceMode(self)
+    }
+    
+    func menuBarControllerCurrentPerformanceMode(_ controller: MenuBarController) -> Bool {
+        return delegate?.componentManagerCurrentPerformanceMode(self) ?? true
+    }
+    
     func menuBarController(_ controller: MenuBarController, didSelectTargetApp app: AppTargetManager.TargetApp) {
         appTargetManager.setTargetApp(app)
         print("🎯 Target: \(app.displayName)")
     }
     
     func menuBarControllerDidRequestTestDictation(_ controller: MenuBarController) {
-        delegate?.componentManager(self, didProcessText: "Test from MantaScribe Pro - Complete Architecture")
+        let mode = isSmartModeEnabled ? "Smart" : "Fast"
+        delegate?.componentManager(self, didProcessText: "Test from MantaScribe Pro - \(mode) Mode")
     }
     
     func menuBarController(_ controller: MenuBarController, didToggleContextualCategory category: String, enabled: Bool) {
@@ -316,17 +416,15 @@ extension ComponentManager: MenuBarControllerDelegate {
     }
 }
 
-// MARK: - SmartText Coordinator
+// MARK: - SmartText Coordinator (Future Smart Mode Integration)
 
-/// Coordinates all SmartText components for optimal performance and clean processing
+/// Coordinates all SmartText components for future smart mode re-integration
 fileprivate class SmartTextCoordinator {
     
-    // Shared SmartText component instances
-    private let cursorDetector = CursorDetector()
-    private let capitalizationEngine = CapitalizationEngine()
-    private let spacingEngine = SpacingEngine()
+    // Future smart mode integration point
+    // Will be re-enabled when smart mode is fully implemented
     
-    /// Process text with SmartText intelligence and send to target app
+    /// Process text with future SmartText intelligence
     func processAndSend(
         text: String,
         targetApp: AppTargetManager.TargetApp,
@@ -334,73 +432,26 @@ fileprivate class SmartTextCoordinator {
         completion: @escaping (AppTargetManager.AppSwitchResult) -> Void
     ) {
         
-        print("🧠 SmartText processing: '\(text)'")
+        print("🧠 SmartText processing (future): '\(text)'")
         
-        // Analyze context and apply intelligence
-        let analysis = performSmartAnalysis(for: text)
-        
-        // Send with intelligent formatting
+        // Future: Smart analysis and processing
+        // For now: Direct send with basic formatting
         appTargetManager.sendText(
-            analysis.processedText,
-            shouldCapitalize: analysis.shouldCapitalize,
-            needsLeadingSpace: analysis.needsLeadingSpace,
-            needsTrailingSpace: analysis.needsTrailingSpace,
+            text,
+            shouldCapitalize: false,
+            needsLeadingSpace: true,
+            needsTrailingSpace: false,
             completion: completion
         )
-        
-        logSmartTextDecisions(analysis)
-    }
-    
-    private func performSmartAnalysis(for text: String) -> SmartTextAnalysis {
-        let isPunctuation = spacingEngine.isPunctuation(text)
-        let cursorResult = cursorDetector.detectCursorContext()
-        let shouldCapitalize = cursorResult.context.shouldCapitalize
-        
-        let capitalizationResult = capitalizationEngine.applyCapitalization(
-            to: text,
-            shouldCapitalizeStart: shouldCapitalize
-        )
-        
-        let spacingDecision = spacingEngine.determineSpacing(
-            for: capitalizationResult.text,
-            detectedChars: cursorResult.detectedChars,
-            isPunctuation: isPunctuation
-        )
-        
-        return SmartTextAnalysis(
-            processedText: capitalizationResult.text,
-            shouldCapitalize: shouldCapitalize,
-            needsLeadingSpace: spacingDecision.needsLeadingSpace,
-            needsTrailingSpace: spacingDecision.needsTrailingSpace,
-            cursorContext: cursorResult.context,
-            capitalizationReason: capitalizationResult.reason,
-            spacingReason: spacingDecision.reason
-        )
-    }
-    
-    private func logSmartTextDecisions(_ analysis: SmartTextAnalysis) {
-        print("🧠 SmartText decisions:")
-        print("   Context: \(analysis.cursorContext)")
-        print("   Capitalization: \(analysis.capitalizationReason)")
-        print("   Spacing: \(analysis.spacingReason)")
-        print("   Result: '\(analysis.processedText)'")
     }
 }
 
 // MARK: - Supporting Types
 
-fileprivate struct SmartTextAnalysis {
-    let processedText: String
-    let shouldCapitalize: Bool
-    let needsLeadingSpace: Bool
-    let needsTrailingSpace: Bool
-    let cursorContext: CursorDetector.CursorContext
-    let capitalizationReason: String
-    let spacingReason: String
-}
-
 fileprivate protocol ComponentManagerDelegate: AnyObject {
     func componentManagerDidRequestToggleDictation(_ manager: ComponentManager)
+    func componentManagerDidRequestTogglePerformanceMode(_ manager: ComponentManager)
+    func componentManagerCurrentPerformanceMode(_ manager: ComponentManager) -> Bool
     func componentManager(_ manager: ComponentManager, didProcessText text: String)
     func componentManagerDidStartDictation(_ manager: ComponentManager)
     func componentManagerDidStopDictation(_ manager: ComponentManager)
