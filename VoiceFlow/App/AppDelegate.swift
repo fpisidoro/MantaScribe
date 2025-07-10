@@ -1,42 +1,19 @@
 /*
- * MantaScribe - Complete Medical Dictation App with Contextual Strings
+ * MantaScribe - AppDelegate.swift - Phase 5 Complete
  *
- * STATUS: ✅ PRODUCTION READY - PHASE 3 REFACTORED
- * Date: January 2025
+ * REFACTORING STATUS: Phase 5 Complete - SmartText Components Integrated
  *
- * PHASE 4 CHANGES:
- * ✅ Extracted AppTargetManager for app switching and text sending
- * ✅ Moved TargetApp enum to AppTargetManager
- * ✅ Simplified sendText flow with better separation of concerns
- * ✅ Enhanced app management with better error handling
- * ✅ Maintained 100% functional compatibility
+ * COMPLETED EXTRACTIONS:
+ * ✅ Phase 1: VocabularyManager
+ * ✅ Phase 2: HotkeyManager
+ * ✅ Phase 3: TextProcessor
+ * ✅ Phase 4: AppTargetManager
+ * ✅ Phase 5: SmartText Components (SpacingEngine, CapitalizationEngine, CursorDetector)
  *
- * PREVIOUS PHASE 3 CHANGES:
- * ✅ Extracted TextProcessor for pure text processing functions
- * ✅ Improved confidence-based timing with enhanced quality analysis
- * ✅ Better text validation and similarity detection
- * ✅ Enhanced punctuation command processing
- * ✅ Maintained 100% functional compatibility
- *
- * PREVIOUS PHASE 2 CHANGES:
- * ✅ Extracted HotkeyManager with delegate pattern
- * ✅ Cleaned up setupMenuBar() method significantly
- *
- * PREVIOUS PHASE 1 CHANGES:
- * ✅ Extracted VocabularyManager, ContextualStringsLoader, TextCorrections
- *
- * FEATURES:
- * ✅ Apple contextualStrings integration (20-30% accuracy improvement)
- * ✅ Optimized medical vocabulary (2,440 high-value terms)
- * ✅ Dual vocabulary system (contextual + fallback corrections)
- * ✅ Enhanced menu system with category control
- * ✅ Professional medical workflow optimization
- * ✅ Dual-mode Right Option hotkey (toggle + push-and-hold)
- * ✅ Smart capitalization based on cursor context
- * ✅ Intelligent spacing (no double spaces, proper punctuation)
- * ✅ Background dictation (works while other apps have focus)
- * ✅ Multi-app support (TextEdit, Pages, Notes, Word)
- * ✅ 50-80% performance improvements with confidence-based timing
+ * REMAINING PHASES:
+ * - Phase 6: DictationEngine extraction
+ * - Phase 7: MenuBarController extraction
+ * - Phase 8: Final AppDelegate cleanup
  */
 
 import Cocoa
@@ -46,7 +23,12 @@ import AVFoundation
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
     
+    // MARK: - UI Properties
+    
     var statusBarItem: NSStatusItem!
+    
+    // MARK: - Speech Recognition Properties (Phase 6 - to be extracted)
+    
     var speechRecognizer: SFSpeechRecognizer?
     var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     var recognitionTask: SFSpeechRecognitionTask?
@@ -57,22 +39,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var hasProcessedBuffer = false
     var isCurrentlyProcessing = false
     
-    // PHASE 2: Extracted hotkey management
+    // MARK: - Core Components (Phases 1-4)
+    
     private var hotkeyManager: HotkeyManager!
-    
-    // PHASE 3: Extracted text processing
     private var textProcessor: TextProcessor!
-    
-    // PHASE 4: Extracted app target management
     private var appTargetManager: AppTargetManager!
     
-    // Target app selection - PHASE 4: Moved to AppTargetManager
+    // MARK: - SmartText Components (Phase 5)
+    
+    private let cursorDetector = CursorDetector()
+    private let capitalizationEngine = CapitalizationEngine()
+    private let spacingEngine = SpacingEngine()
+    
+    // MARK: - State Properties
+    
     var selectedTargetApp: AppTargetManager.TargetApp {
         get { return appTargetManager.selectedTargetApp }
         set { appTargetManager.setTargetApp(newValue) }
     }
     var lastDetectedChars = ""
     var lastProcessedText = ""
+    
+    // MARK: - App Lifecycle
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         setupHotkeyManager()
@@ -131,10 +119,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         menu.addItem(NSMenuItem.separator())
         
-        // Medical Vocabulary submenu with contextual strings
+        // Medical Vocabulary submenu
         let vocabularyMenu = NSMenu()
         
-        // Add contextual categories (priority - these improve speech recognition)
+        // Add contextual categories
         let contextualCategories = VocabularyManager.shared.getAvailableContextualCategories()
         if !contextualCategories.isEmpty {
             let headerItem = NSMenuItem(title: "Enhanced Recognition:", action: nil, keyEquivalent: "")
@@ -153,7 +141,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             vocabularyMenu.addItem(NSMenuItem.separator())
         }
         
-        // Add legacy vocabulary categories (fallback corrections)
+        // Add legacy vocabulary categories
         let legacyCategories = VocabularyManager.shared.getAvailableCategories()
         if !legacyCategories.isEmpty {
             let headerItem = NSMenuItem(title: "Fallback Corrections:", action: nil, keyEquivalent: "")
@@ -186,8 +174,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "About MantaScribe Pro", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusBarItem.menu = menu
-        
-        // NOTE: Hotkey setup is now handled by HotkeyManager in setupHotkeyManager()
     }
     
     func setupSpeechRecognition() {
@@ -229,29 +215,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func testDictation() {
-        // PHASE 4: Use AppTargetManager for text sending
-        let shouldCapitalize = checkIfShouldCapitalize()
-        let previous2Chars = getLastDetectedChars()
-        let isPunctuation = false
-        
-        let needsLeadingSpace = determineIfSpaceNeeded(previous2Chars, isPunctuation: isPunctuation)
-        let needsTrailingSpace = determineTrailingSpace(previous2Chars, isPunctuation: isPunctuation)
-        
-        appTargetManager.sendText("Test from MantaScribe Pro with enhanced medical recognition",
-                                shouldCapitalize: shouldCapitalize,
-                                needsLeadingSpace: needsLeadingSpace,
-                                needsTrailingSpace: needsTrailingSpace) { result in
-            switch result {
-            case .success:
-                print("✅ Test dictation sent successfully")
-            case .appNotFound:
-                print("❌ Target app not found")
-            case .launchFailed(let error):
-                print("❌ Failed to launch target app: \(error)")
-            case .focusRestoreFailed:
-                print("⚠️ Failed to restore focus")
-            }
-        }
+        let testText = "Test from MantaScribe with enhanced SmartText processing"
+        processAndSendTextWithSmartComponents(testText)
     }
     
     @objc func showAbout() {
@@ -270,11 +235,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         🏥 Multi-App Support: TextEdit, Pages, Notes, Word
         
         Target App: \(selectedTargetApp.displayName)
-        
-        Expected Accuracy Improvement:
-        • Medical terms: 70% → 90%+
-        • Drug names: 60% → 90%+
-        • Procedures: 65% → 88%+
         
         Created for medical professionals, analysts, and researchers.
         """
@@ -328,7 +288,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    // MARK: - Dictation Methods with Contextual Strings
+    // MARK: - Dictation Methods (Phase 6 - to be extracted)
     
     func startDictation() {
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
@@ -341,12 +301,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         playSound("Glass")
         updateStatus(.listening)
         
+        // Update hotkey manager with recording state
+        hotkeyManager.updateRecordingState(true)
+        
         currentBuffer = ""
         hasProcessedBuffer = false
         isCurrentlyProcessing = false
-        
-        // PHASE 2: Notify hotkey manager of recording state change
-        hotkeyManager.updateRecordingState(true)
         
         recognitionTask?.cancel()
         recognitionTask = nil
@@ -356,7 +316,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             audioEngine.inputNode.removeTap(onBus: 0)
         }
         
-        // Create recognition request with contextual strings
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
             print("❌ Failed to create recognition request")
@@ -373,9 +332,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !contextualStrings.isEmpty {
             recognitionRequest.contextualStrings = contextualStrings
             print("🎯 Applied \(contextualStrings.count) contextual strings for enhanced medical recognition")
-            print("📚 Sample terms: \(contextualStrings.prefix(5).joined(separator: ", "))...")
-        } else {
-            print("⚠️ No contextual strings available - using standard recognition")
         }
         
         let inputNode = audioEngine.inputNode
@@ -401,9 +357,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             
             if let result = result {
                 let text = result.bestTranscription.formattedString
-                
-                // PHASE 3: Enhanced quality analysis
-                let quality = self.textProcessor.analyzeTranscriptionQuality(result.bestTranscription)
+                let confidence = self.calculateConfidence(from: result.bestTranscription)
                 
                 if result.isFinal {
                     DispatchQueue.main.async {
@@ -425,8 +379,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                     }
                                 }
                             }
-                        } else {
-                            print("🔄 Final result skipped - already processed or empty")
                         }
                     }
                 } else {
@@ -439,10 +391,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         
                         self.bufferTimer?.invalidate()
                         
-                        // PHASE 3: Use TextProcessor for intelligent timeout determination
-                        let timeout = self.textProcessor.determineProcessingTimeout(quality: quality, text: text)
-                        
-                        print("🧠 Quality: \(quality), Timeout: \(timeout)s")
+                        var timeout: TimeInterval
+                        if confidence > 0.9 && (text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?")) {
+                            timeout = 0.3
+                        } else if confidence > 0.8 {
+                            timeout = 0.8
+                        } else if text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?") {
+                            timeout = 1.0
+                        } else {
+                            timeout = 1.5
+                        }
                         
                         self.bufferTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
                             DispatchQueue.main.async {
@@ -478,56 +436,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let textToProcess = currentBuffer.trimmingCharacters(in: .whitespaces)
         updateStatus(.sending)
         
-        // Apply vocabulary corrections (now mostly fallback since contextual strings handle most cases)
-        print("🔍 PROCESSING: '\(textToProcess)'")
+        // Process text using TextProcessor
         let vocabularyProcessed = VocabularyManager.shared.processText(textToProcess)
-        
-        // PHASE 3: Use TextProcessor for punctuation commands
-        let finalText = textProcessor.processPunctuationCommands(vocabularyProcessed)
+        let processedText = textProcessor.processPunctuationCommands(vocabularyProcessed)
         
         hasProcessedBuffer = true
         currentBuffer = ""
         bufferTimer?.invalidate()
         
-        print("📝 Final output: '\(finalText)'")
+        print("📝 Final output: '\(processedText)'")
         
-        // PHASE 3: Use TextProcessor for similarity detection
-        if textProcessor.isSubstantiallySimilar(finalText, to: lastProcessedText) {
+        if textProcessor.isSubstantiallySimilar(processedText, to: lastProcessedText) {
             print("🔄 Skipping - too similar to recent: '\(lastProcessedText)'")
             isCurrentlyProcessing = false
             updateStatus(.listening)
             return
         }
         
-        lastProcessedText = finalText
+        lastProcessedText = processedText
         playSound("Purr")
         
-        // PHASE 4: Use AppTargetManager for text sending with smart formatting
-        let shouldCapitalize = checkIfShouldCapitalize()
-        let previous2Chars = getLastDetectedChars()
-        let isPunctuation = [".", ",", "?", "!", ":", ";"].contains(finalText)
-        
-        let needsLeadingSpace = determineIfSpaceNeeded(previous2Chars, isPunctuation: isPunctuation)
-        let needsTrailingSpace = determineTrailingSpace(previous2Chars, isPunctuation: isPunctuation)
-        
-        appTargetManager.sendText(finalText,
-                                shouldCapitalize: shouldCapitalize,
-                                needsLeadingSpace: needsLeadingSpace,
-                                needsTrailingSpace: needsTrailingSpace) { [weak self] result in
-            switch result {
-            case .success:
-                self?.updateStatus(.success)
-            case .appNotFound:
-                print("❌ Target app not found")
-                self?.updateStatus(.error)
-            case .launchFailed(let error):
-                print("❌ Failed to launch target app: \(error)")
-                self?.updateStatus(.error)
-            case .focusRestoreFailed:
-                print("⚠️ Failed to restore focus")
-                self?.updateStatus(.success) // Still consider it success if text was sent
-            }
-        }
+        // PHASE 5: Process and send using SmartText components
+        processAndSendTextWithSmartComponents(processedText)
         
         isCurrentlyProcessing = false
         
@@ -544,6 +474,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func stopDictation() {
         print("⏹️ Stopping dictation")
         
+        // Update hotkey manager with recording state
+        hotkeyManager.updateRecordingState(false)
+        
         if !currentBuffer.isEmpty && !hasProcessedBuffer && !isCurrentlyProcessing {
             print("📝 Processing final buffer: '\(currentBuffer)'")
             flushBuffer()
@@ -554,9 +487,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         currentBuffer = ""
         hasProcessedBuffer = true
         isCurrentlyProcessing = false
-        
-        // PHASE 2: Notify hotkey manager of recording state change
-        hotkeyManager.updateRecordingState(false)
         
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -575,240 +505,74 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hasProcessedBuffer = false
     }
     
-    // MARK: - Smart Capitalization & Spacing (keeping all existing functionality)
+    // MARK: - PHASE 5: SmartText Processing & Sending
     
-    func checkIfShouldCapitalize() -> Bool {
-        let pasteboard = NSPasteboard.general
-        let originalClipboard = pasteboard.string(forType: .string)
+    private func processAndSendTextWithSmartComponents(_ text: String) {
+        print("🚨 PROCESSING TEXT WITH SMARTTEXT COMPONENTS")
         
-        let leftKey = CGEvent(keyboardEventSource: nil, virtualKey: 0x7B, keyDown: true)
-        let leftKeyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x7B, keyDown: false)
+        let isPunctuation = spacingEngine.isPunctuation(text)
         
-        leftKey?.post(tap: .cghidEventTap)
-        leftKeyUp?.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.02)
-        leftKey?.post(tap: .cghidEventTap)
-        leftKeyUp?.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.02)
+        print("🎯 Sending: '\(text)' to \(selectedTargetApp.displayName)")
         
-        let rightKey = CGEvent(keyboardEventSource: nil, virtualKey: 0x7C, keyDown: true)
-        let rightKeyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x7C, keyDown: false)
+        // PHASE 5: Use SmartText components for context analysis
+        let cursorResult = cursorDetector.detectCursorContext()
+        let shouldCapitalize = cursorResult.context.shouldCapitalize
         
-        rightKey?.flags = .maskShift
-        rightKeyUp?.flags = .maskShift
-        rightKey?.post(tap: .cghidEventTap)
-        rightKeyUp?.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.02)
+        // Apply smart capitalization
+        let capitalizationResult = capitalizationEngine.applyCapitalization(
+            to: text,
+            shouldCapitalizeStart: shouldCapitalize
+        )
         
-        rightKey?.flags = .maskShift
-        rightKeyUp?.flags = .maskShift
-        rightKey?.post(tap: .cghidEventTap)
-        rightKeyUp?.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.02)
+        // Determine spacing needs
+        let spacingDecision = spacingEngine.determineSpacing(
+            for: capitalizationResult.text,
+            detectedChars: cursorResult.detectedChars,
+            isPunctuation: isPunctuation
+        )
         
-        let cmdC = CGEvent(keyboardEventSource: nil, virtualKey: 0x08, keyDown: true)
-        let cmdCUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x08, keyDown: false)
-        cmdC?.flags = .maskCommand
-        cmdCUp?.flags = .maskCommand
-        cmdC?.post(tap: .cghidEventTap)
-        cmdCUp?.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.02)
+        print("📝 SmartText analysis complete:")
+        print("   Cursor context: \(cursorResult.context)")
+        print("   Detected chars: '\(cursorResult.detectedChars.debugDescription)'")
+        print("   Capitalization: \(capitalizationResult.reason)")
+        print("   Spacing: \(spacingDecision.reason)")
         
-        let previous2Chars = pasteboard.string(forType: .string) ?? ""
-        let safePrevious2Chars = String(previous2Chars.suffix(2))
-        self.lastDetectedChars = safePrevious2Chars
-        
-        print("📋 Previous 2 chars: '\(safePrevious2Chars.debugDescription)' (length: \(safePrevious2Chars.count))")
-        
-        rightKey?.flags = []
-        rightKeyUp?.flags = []
-        rightKey?.post(tap: .cghidEventTap)
-        rightKeyUp?.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.02)
-        
-        pasteboard.clearContents()
-        if let original = originalClipboard {
-            pasteboard.setString(original, forType: .string)
-        }
-        
-        if safePrevious2Chars.isEmpty {
-            print("📋 Empty - start of document - CAPITALIZE")
-            return true
-        } else if safePrevious2Chars.contains(where: { "!?.".contains($0) }) {
-            print("📋 Found sentence-ending punctuation - CAPITALIZE")
-            return true
-        } else if safePrevious2Chars.contains(where: { ":;".contains($0) }) {
-            print("📋 Found clause punctuation - lowercase")
-            return false
-        } else if safePrevious2Chars == "  " || safePrevious2Chars.contains("\n\n") || safePrevious2Chars.hasSuffix("\n") {
-            print("📋 Found double spaces/newlines or line ending - CAPITALIZE")
-            return true
-        } else {
-            print("📋 Normal text - lowercase")
-            return false
-        }
-    }
-    
-    func makeFirstWordLowercase(_ text: String) -> String {
-        guard !text.isEmpty else { return text }
-        
-        let words = text.split(separator: " ", maxSplits: 1)
-        guard let firstWord = words.first else { return text }
-        
-        let firstWordString = String(firstWord)
-        let lowercaseFirst = firstWordString.lowercased()
-        
-        if words.count > 1 {
-            let remainder = String(words[1])
-            return lowercaseFirst + " " + remainder
-        } else {
-            return lowercaseFirst
-        }
-    }
-    
-    func getLastDetectedChars() -> String {
-        return lastDetectedChars
-    }
-    
-    func applySmartCapitalizationToFullText(_ text: String, shouldCapitalizeStart: Bool) -> String {
-        var result = text
-        
-        if shouldCapitalizeStart {
-            result = capitalizeFirstWord(result)
-            print("🔤 Capitalized first word due to cursor context")
-        } else {
-            result = makeFirstWordLowercase(result)
-            print("🔤 Lowercased first word due to cursor context")
-        }
-        
-        result = capitalizeAfterPunctuation(result)
-        
-        return result
-    }
-    
-    func capitalizeFirstWord(_ text: String) -> String {
-        guard !text.isEmpty else { return text }
-        let firstChar = String(text.prefix(1)).uppercased()
-        return firstChar + String(text.dropFirst())
-    }
-    
-    func capitalizeAfterPunctuation(_ text: String) -> String {
-        let sentenceEnders = CharacterSet(charactersIn: ".!?")
-        var result = ""
-        var shouldCapitalizeNext = false
-        var i = text.startIndex
-        
-        while i < text.endIndex {
-            let char = text[i]
-            
-            if sentenceEnders.contains(char.unicodeScalars.first!) {
-                shouldCapitalizeNext = true
-                result.append(char)
-                print("🔤 Found sentence ender '\(char)' - will capitalize next word")
-            } else if char.isWhitespace {
-                result.append(char)
-            } else if char.isLetter && shouldCapitalizeNext {
-                let wordStart = i
-                var wordEnd = i
-                
-                while wordEnd < text.endIndex && text[wordEnd].isLetter {
-                    wordEnd = text.index(after: wordEnd)
-                }
-                
-                let word = String(text[wordStart..<wordEnd])
-                let capitalizedWord = capitalizeWordSafely(word)
-                result.append(capitalizedWord)
-                
-                print("🔤 Capitalized word after punctuation: '\(word)' → '\(capitalizedWord)'")
-                
-                i = wordEnd
-                shouldCapitalizeNext = false
-                continue
-            } else {
-                result.append(char)
-                if char.isLetter {
-                    shouldCapitalizeNext = false
+        // Send via AppTargetManager with SmartText results
+        appTargetManager.sendText(
+            capitalizationResult.text,
+            shouldCapitalize: shouldCapitalize,
+            needsLeadingSpace: spacingDecision.needsLeadingSpace,
+            needsTrailingSpace: spacingDecision.needsTrailingSpace
+        ) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    self.updateStatus(.success)
+                case .appNotFound:
+                    print("❌ Target app not found")
+                    self.updateStatus(.error)
+                case .launchFailed(let error):
+                    print("❌ Failed to launch app: \(error)")
+                    self.updateStatus(.error)
+                case .focusRestoreFailed:
+                    print("⚠️ Focus restore failed but text sent")
+                    self.updateStatus(.success)
                 }
             }
-            
-            i = text.index(after: i)
         }
-        
-        return result
-    }
-    
-    func capitalizeWordSafely(_ word: String) -> String {
-        let lowercased = word.lowercased()
-        
-        let medicalTerms = ["ct", "mri", "ecg", "ekg", "covid", "bp", "hr", "rr", "icu", "er", "cpr", "dnr"]
-        
-        if medicalTerms.contains(lowercased) {
-            return word.uppercased()
-        }
-        
-        return word.prefix(1).uppercased() + word.dropFirst().lowercased()
-    }
-    
-    func determineIfSpaceNeeded(_ previous2Chars: String, isPunctuation: Bool) -> Bool {
-        if isPunctuation {
-            print("📝 Spacing: Punctuation detected - no space needed")
-            return false
-        }
-        
-        if previous2Chars.isEmpty {
-            print("📝 Spacing: No previous chars detected - adding space")
-            return true
-        }
-        
-        if previous2Chars.count >= 2 {
-            let secondToLast = previous2Chars[previous2Chars.index(previous2Chars.endIndex, offsetBy: -2)]
-            let lastChar = previous2Chars.last!
-            
-            if secondToLast.isWhitespace && ["(", "[", "{"].contains(lastChar) {
-                print("📝 Spacing: Detected [space+\(lastChar)] pattern - no leading space needed")
-                return false
-            }
-        }
-        
-        let lastChar = previous2Chars.last!
-        
-        if lastChar.isWhitespace || lastChar.isNewline {
-            print("📝 Spacing: Last char is whitespace/newline - no space needed")
-            return false
-        }
-        
-        print("📝 Spacing: Last char is '\(lastChar)' - space needed")
-        return true
-    }
-    
-    func determineTrailingSpace(_ previous2Chars: String, isPunctuation: Bool) -> Bool {
-        if isPunctuation {
-            return false
-        }
-        
-        if previous2Chars.count >= 2 {
-            let secondToLast = previous2Chars[previous2Chars.index(previous2Chars.endIndex, offsetBy: -2)]
-            let lastChar = previous2Chars.last!
-            
-            if secondToLast.isLetter && lastChar.isWhitespace {
-                print("📝 Trailing Space: Detected [letter+space] pattern - adding trailing space")
-                return true
-            }
-            
-            if secondToLast.isWhitespace && ["(", "[", "{"].contains(lastChar) {
-                print("📝 Trailing Space: Detected [space+\(lastChar)] pattern - adding trailing space")
-                return true
-            }
-        }
-        
-        print("📝 Trailing Space: No insertion pattern detected - no trailing space needed")
-        return false
     }
     
     // MARK: - Helper Methods
     
-    func formatCategoryName(_ category: String) -> String {
-        // Convert category names to readable format
+    private func calculateConfidence(from transcription: SFTranscription) -> Float {
+        let segments = transcription.segments
+        guard !segments.isEmpty else { return 0.0 }
+        
+        let totalConfidence = segments.reduce(0.0) { $0 + $1.confidence }
+        return totalConfidence / Float(segments.count)
+    }
+    
+    private func formatCategoryName(_ category: String) -> String {
         return category
             .replacingOccurrences(of: "_", with: " ")
             .split(separator: " ")
@@ -816,7 +580,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .joined(separator: " ")
     }
     
-    // MARK: - UI Methods
+    // MARK: - Status Management (Phase 7 - to be extracted)
     
     enum Status {
         case ready, listening, processing, sending, success, error
