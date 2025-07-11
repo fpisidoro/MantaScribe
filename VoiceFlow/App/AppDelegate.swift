@@ -1,5 +1,5 @@
 /*
- * MantaScribe - AppDelegate.swift - Clean Mode Integration
+ * MantaScribe - AppDelegate.swift - Clean Mode Integration with Voice Commands
  *
  * CLEAN ARCHITECTURE: Separated dictation modes and processing modes
  *
@@ -11,9 +11,14 @@
  * - Fast: Minimal processing for maximum speed
  * - Smart: Full features (future re-integration point)
  *
+ * VOICE COMMANDS:
+ * - Processed before text transcription
+ * - Extensible system for "scratch that", templates, navigation
+ *
  * BENEFITS:
  * - No double transcription
  * - Clean mode separation
+ * - Voice command architecture ready
  * - Future-ready for smart features
  * - Optimized performance
  */
@@ -40,6 +45,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Manages all core application components with clean dependency injection
     private var componentManager: ComponentManager!
     
+    /// Processes voice commands before text transcription
+    private var voiceCommandProcessor: VoiceCommandProcessor!
+    
     /// Coordinates SmartText processing (only used in Smart Mode)
     private var smartTextCoordinator: SmartTextCoordinator!
     
@@ -61,16 +69,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Architecture Initialization
     
     private func initializeArchitecture() {
+        // Initialize voice command processing system
+        voiceCommandProcessor = VoiceCommandProcessor()
+        voiceCommandProcessor.delegate = self
+        
         // Initialize component management system
         componentManager = ComponentManager()
         componentManager.delegate = self
         componentManager.initializeAllComponents()
         componentManager.updatePerformanceMode(isSmartModeEnabled)
         
+        // Connect voice commands to app target manager
+        voiceCommandProcessor.setAppTargetManager(componentManager.appTargetManager)
+        
         // Initialize SmartText coordination system (for future Smart Mode)
         smartTextCoordinator = SmartTextCoordinator()
         
-        print("🏗️ MantaScribe: Clean architecture initialized with \(componentManager.componentCount) components")
+        print("🏗️ MantaScribe: Clean architecture initialized with \(componentManager.componentCount) components + voice commands")
     }
     
     private func requestRequiredPermissions() {
@@ -86,6 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let targetApp = componentManager.currentTargetApp
         let vocabularyCount = VocabularyManager.shared.getContextualStrings().count
         let modeStatus = isSmartModeEnabled ? "Smart Mode (Future Features)" : "Fast Mode (Performance Optimized)"
+        let commandCount = voiceCommandProcessor.getAvailableCommands().count
         
         print("""
         
@@ -95,6 +111,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         🎯 Medical Terms: \(vocabularyCount) enhanced recognition terms
         ⌨️ Hotkey: Right Option (toggle & push-to-talk modes)
         ⚡ Performance: \(modeStatus)
+        🎤 Voice Commands: \(commandCount) commands available
         🏗️ Architecture: Clean mode separation
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         Ready for professional medical dictation workflows!
@@ -107,10 +124,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func processTextWithOptimalPath(_ rawText: String) {
         print("📝 Processing (\(isSmartModeEnabled ? "Smart" : "Fast")): '\(rawText)'")
         
-        if isSmartModeEnabled {
-            processWithSmartMode(rawText)
-        } else {
-            processWithFastMode(rawText)
+        // STEP 1: Check for voice commands first
+        let commandResult = voiceCommandProcessor.processText(rawText)
+        
+        switch commandResult {
+        case .commandExecuted(let message):
+            print("🎤 Voice command executed: \(message)")
+            // Command executed, don't send as text
+            return
+            
+        case .textToSend(let processedText):
+            // Not a command, continue with normal text processing
+            if isSmartModeEnabled {
+                processWithSmartMode(processedText)
+            } else {
+                processWithFastMode(processedText)
+            }
+            
+        case .commandNotRecognized:
+            print("🎤 Unknown command attempted: '\(rawText)'")
+            // Could show user feedback or just ignore
+            return
         }
     }
     
@@ -232,6 +266,30 @@ extension AppDelegate: ComponentManagerDelegate {
     
     fileprivate func componentManager(_ manager: ComponentManager, didEncounterError error: Error) {
         print("❌ Component error: \(error.localizedDescription)")
+    }
+}
+
+// MARK: - Voice Command Processor Delegate
+
+extension AppDelegate: VoiceCommandProcessorDelegate {
+    func voiceCommandProcessor(_ processor: VoiceCommandProcessor, didExecuteUndo count: Int) {
+        let countText = count == 1 ? "command" : "\(count) commands"
+        print("🎤 Undo executed: \(countText)")
+        
+        // Optional: Show brief status feedback
+        if isSmartModeEnabled {
+            componentManager?.updateStatus(.success)
+        }
+    }
+    
+    func voiceCommandProcessor(_ processor: VoiceCommandProcessor, didExecuteNavigation command: String) {
+        print("🎤 Navigation command: \(command)")
+        // Future: Handle navigation commands
+    }
+    
+    func voiceCommandProcessor(_ processor: VoiceCommandProcessor, didEncounterUnknownCommand text: String) {
+        print("🎤 Unknown command: \(text)")
+        // Future: Could show user feedback for unrecognized commands
     }
 }
 
