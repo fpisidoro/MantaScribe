@@ -360,10 +360,10 @@ class DictationEngine: NSObject {
         }
     }
     
-    // MARK: - Word-Level Incremental Text Extraction (UPDATED)
+    // MARK: - FIXED: Smart Sentence Boundary Detection + Mid-Sentence Correction Filtering
     
     private func extractIncrementalText(_ newText: String) -> String {
-        // Handle incremental text extraction with word-level intelligence
+        // Handle incremental text extraction with smart sentence boundary detection
         if lastProcessedText.isEmpty {
             // First text, send everything
             return newText
@@ -390,31 +390,62 @@ class DictationEngine: NSObject {
         
         print("🔍 Common words from start: \(commonWordCount)")
         
-        // Determine what to send based on comparison
-        if currentWords.count > commonWordCount {
-            // We have new words beyond the common sequence
+        // NEW: Check for mid-sentence corrections during pauses (Option 1)
+        if isLikelyPauseCorrection(previousWords, currentWords, commonWordCount) {
+            print("📝 Mid-sentence correction detected - skipping to avoid partial phrases")
+            return ""
+        }
+        
+        // FIXED: Better sentence boundary detection
+        if commonWordCount == 0 && previousWords.count > 0 {
+            // User started completely new sentence - send the entire new sentence
+            print("📝 New sentence detected - sending complete new sentence: '\(newText)'")
+            return newText
+        } else if currentWords.count > commonWordCount {
+            // User added to existing sentence - send only new words
             let newWords = Array(currentWords[commonWordCount...])
             let result = newWords.joined(separator: " ")
             print("📝 Sending new words: '\(result)'")
             return result
-            
         } else if currentWords.count == previousWords.count && commonWordCount < currentWords.count {
             // Same number of words but some changed in the middle (revision)
             // Don't send anything to avoid duplicates
             print("📝 Word revision detected - skipping to avoid duplicate")
             return ""
-            
         } else if currentWords.count < previousWords.count {
             // Current text is shorter - likely a recognition correction
             // Don't send anything to avoid duplicates
             print("📝 Text got shorter - likely recognition correction, skipping")
             return ""
-            
         } else {
             // Same length, all words match - this is a true duplicate
             print("📝 True duplicate detected - skipping")
             return ""
         }
+    }
+    
+    /// Detect mid-sentence corrections that happen during user pauses
+    private func isLikelyPauseCorrection(_ previousWords: [String.SubSequence], _ currentWords: [String.SubSequence], _ commonWordCount: Int) -> Bool {
+        // Criteria for mid-sentence correction:
+        
+        // 1. Words were inserted/changed in the middle (not at the end)
+        if commonWordCount > 0 && commonWordCount < previousWords.count {
+            print("📝 Detected change in middle of sentence (common: \(commonWordCount), previous: \(previousWords.count))")
+            
+            // 2. New version is longer (words added to middle)
+            if currentWords.count > previousWords.count {
+                print("📝 Words added to middle of existing sentence - likely pause correction")
+                return true
+            }
+            
+            // 3. Same length but words changed in middle
+            if currentWords.count == previousWords.count {
+                print("📝 Words replaced in middle of sentence - likely pause correction")
+                return true
+            }
+        }
+        
+        return false
     }
     
     // MARK: - Push-to-Talk Mode Logic (Final Results Only)

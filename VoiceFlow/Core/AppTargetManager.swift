@@ -35,10 +35,9 @@ class AppTargetManager {
     
     private(set) var selectedTargetApp: TargetApp = .textEdit
     
-    // Timing constants
-    private let runningAppDelay: TimeInterval = 0.2
-    private let launchAppDelay: TimeInterval = 1.0
-    private let focusRestoreDelay: TimeInterval = 0.1
+    // Adaptive timing - much faster than before
+    private let appLaunchDelay: TimeInterval = 0.8         // Only for new app launches
+    private let focusRestoreDelay: TimeInterval = 0.02     // Much faster return (was 0.1)
     private let statusUpdateDelay: TimeInterval = 0.05
     
     // MARK: - Public Interface
@@ -50,7 +49,7 @@ class AppTargetManager {
     }
     
     /// Send text to the currently selected target app with smart formatting
-    func sendText(_ text: String, 
+    func sendText(_ text: String,
                   shouldCapitalize: Bool,
                   needsLeadingSpace: Bool,
                   needsTrailingSpace: Bool,
@@ -66,7 +65,7 @@ class AppTargetManager {
         print("📱 Original app: \(originalApp?.localizedName ?? "Unknown")")
         
         // Apply smart formatting
-        let finalText = applySmartFormatting(to: text, 
+        let finalText = applySmartFormatting(to: text,
                                            shouldCapitalize: shouldCapitalize,
                                            isPunctuation: isPunctuation)
         
@@ -94,6 +93,25 @@ class AppTargetManager {
         return TargetApp.allCases
     }
     
+    // MARK: - Private Methods - Adaptive Timing
+    
+    /// Determine optimal delay based on app state for nearly invisible switching
+    private func getOptimalDelay(for app: NSRunningApplication) -> TimeInterval {
+        if app.isActive {
+            // App is already frontmost - minimal delay needed for nearly invisible switching
+            print("⚡ App already active - using minimal delay (0.02s)")
+            return 0.02
+        } else if app.activationPolicy == .regular {
+            // App is running but not active - short delay for quick switching
+            print("⚡ App running but not active - using short delay (0.05s)")
+            return 0.05
+        } else {
+            // Edge case - fallback to longer delay
+            print("⚡ App in unusual state - using medium delay (0.1s)")
+            return 0.1
+        }
+    }
+    
     // MARK: - Private Methods - App Management
     
     private func handleRunningApp(_ app: NSRunningApplication,
@@ -103,12 +121,15 @@ class AppTargetManager {
         
         print("✅ Found running app: \(app.localizedName ?? selectedTargetApp.bundleId)")
         
+        // Get optimal delay based on current app state
+        let optimalDelay = getOptimalDelay(for: app)
+        
         // Activate the target app
         app.activate(options: [.activateIgnoringOtherApps])
-        print("✅ App activation called")
+        print("✅ App activation called with \(optimalDelay)s delay")
         
-        // Wait for app to become active, then paste
-        DispatchQueue.main.asyncAfter(deadline: .now() + runningAppDelay) {
+        // Wait optimal time for app to become active, then paste
+        DispatchQueue.main.asyncAfter(deadline: .now() + optimalDelay) {
             self.performTextInsertion(text: text, originalApp: originalApp, completion: completion)
         }
     }
@@ -129,8 +150,8 @@ class AppTargetManager {
             try NSWorkspace.shared.launchApplication(at: appURL, options: [.default], configuration: [:])
             print("✅ App launch initiated")
             
-            // Wait longer for app launch
-            DispatchQueue.main.asyncAfter(deadline: .now() + launchAppDelay) {
+            // App launches still need longer delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + appLaunchDelay) {
                 self.performTextInsertion(text: text, originalApp: originalApp, completion: completion)
             }
         } catch {
@@ -153,7 +174,7 @@ class AppTargetManager {
         // Paste immediately
         simulatePaste()
         
-        // Switch back to original app after a brief delay
+        // Switch back to original app with much faster delay for nearly invisible return
         DispatchQueue.main.asyncAfter(deadline: .now() + focusRestoreDelay) {
             self.restoreFocus(to: originalApp, completion: completion)
         }
