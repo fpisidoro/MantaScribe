@@ -360,7 +360,7 @@ class DictationEngine: NSObject {
         }
     }
     
-    // MARK: - FIXED: Smart Sentence Boundary Detection + Mid-Sentence Correction Filtering
+    // MARK: - REFINED: Smart Sentence Boundary Detection + Improved Mid-Sentence Correction Filtering
     
     private func extractIncrementalText(_ newText: String) -> String {
         // Handle incremental text extraction with smart sentence boundary detection
@@ -390,7 +390,7 @@ class DictationEngine: NSObject {
         
         print("🔍 Common words from start: \(commonWordCount)")
         
-        // NEW: Check for mid-sentence corrections during pauses (Option 1)
+        // REFINED: Check for mid-sentence corrections during pauses
         if isLikelyPauseCorrection(previousWords, currentWords, commonWordCount) {
             print("📝 Mid-sentence correction detected - skipping to avoid partial phrases")
             return ""
@@ -424,28 +424,49 @@ class DictationEngine: NSObject {
         }
     }
     
-    /// Detect mid-sentence corrections that happen during user pauses
+    /// REFINED: Detect mid-sentence corrections with improved punctuation handling
     private func isLikelyPauseCorrection(_ previousWords: [String.SubSequence], _ currentWords: [String.SubSequence], _ commonWordCount: Int) -> Bool {
-        // Criteria for mid-sentence correction:
+        // Only flag if we have a change in the middle AND it's not just punctuation
+        guard commonWordCount > 0 && commonWordCount < previousWords.count else {
+            return false
+        }
         
-        // 1. Words were inserted/changed in the middle (not at the end)
-        if commonWordCount > 0 && commonWordCount < previousWords.count {
-            print("📝 Detected change in middle of sentence (common: \(commonWordCount), previous: \(previousWords.count))")
+        // Check what actually changed at the difference point
+        if commonWordCount < currentWords.count {
+            let previousWord = String(previousWords[commonWordCount])
+            let currentWord = String(currentWords[commonWordCount])
             
-            // 2. New version is longer (words added to middle)
-            if currentWords.count > previousWords.count {
-                print("📝 Words added to middle of existing sentence - likely pause correction")
-                return true
+            // If it's just punctuation/symbols being added, allow it
+            if currentWord.hasPrefix(previousWord) &&
+               currentWord.count <= previousWord.count + 3 &&  // Allow up to 3 chars of punctuation
+               isPunctuationAddition(from: previousWord, to: currentWord) {
+                print("📝 Punctuation addition detected: '\(previousWord)' → '\(currentWord)' - allowing")
+                return false
             }
             
-            // 3. Same length but words changed in middle
-            if currentWords.count == previousWords.count {
-                print("📝 Words replaced in middle of sentence - likely pause correction")
+            // If it's a real word substitution, flag it
+            if previousWord != currentWord && !currentWord.hasPrefix(previousWord) {
+                print("📝 Real word substitution: '\(previousWord)' → '\(currentWord)' - flagging as correction")
                 return true
             }
         }
         
+        // For changes in middle with word additions (not substitutions)
+        if currentWords.count > previousWords.count {
+            print("📝 Words added to middle of existing sentence - likely pause correction")
+            return true
+        }
+        
         return false
+    }
+    
+    /// Check if the change is just punctuation/symbol addition
+    private func isPunctuationAddition(from old: String, to new: String) -> Bool {
+        guard new.hasPrefix(old) else { return false }
+        let addition = String(new.dropFirst(old.count))
+        
+        // Allow any non-alphanumeric addition (punctuation, spaces, symbols)
+        return !addition.isEmpty && addition.allSatisfy { !$0.isLetter && !$0.isNumber }
     }
     
     // MARK: - Push-to-Talk Mode Logic (Final Results Only)
