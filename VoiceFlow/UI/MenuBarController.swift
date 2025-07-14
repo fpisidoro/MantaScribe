@@ -31,6 +31,10 @@ class MenuBarController: NSObject {
         super.init()
     }
     
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
     // MARK: - Public Interface
     
     /// Setup the menu bar interface
@@ -95,6 +99,10 @@ class MenuBarController: NSObject {
         // Additional actions
         menu.addItem(NSMenuItem(title: "Test Dictation", action: #selector(testDictation), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        
+        menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ","))
+           menu.addItem(NSMenuItem.separator())
+        
         menu.addItem(NSMenuItem(title: "About MantaScribe Pro", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApplication), keyEquivalent: "q"))
         
@@ -400,6 +408,7 @@ class MenuBarController: NSObject {
         print("🎯 MenuBarController: Legacy vocabulary categories: \(enabled.joined(separator: ", "))")
     }
     
+    
     @objc private func quitApplication() {
         delegate?.menuBarControllerDidRequestQuit(self)
     }
@@ -459,3 +468,165 @@ protocol MenuBarControllerDelegate: AnyObject {
     /// Called when user requests to quit the application
     func menuBarControllerDidRequestQuit(_ controller: MenuBarController)
 }
+
+// Add this to your existing MenuBarController.swift file
+
+// MARK: - Preferences Integration
+// Add these methods to your existing MenuBarController class
+
+extension MenuBarController {
+    
+    // MARK: - Updated Menu Setup
+    
+    private func setupMenuWithPreferences() {
+        // Updated version of your setupMenu() method to include preferences
+        let menu = NSMenu()
+        
+        // Main dictation toggle
+        menu.addItem(NSMenuItem(title: "Toggle Dictation (Right Option)", action: #selector(toggleDictation), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
+        
+        // Performance mode toggle
+        setupPerformanceModeMenu(in: menu)
+        menu.addItem(NSMenuItem.separator())
+        
+        // Target app submenu
+        setupTargetAppSubmenu(in: menu)
+        menu.addItem(NSMenuItem.separator())
+        
+        // Medical vocabulary submenu
+        setupVocabularySubmenu(in: menu)
+        menu.addItem(NSMenuItem.separator())
+        
+        // Additional actions
+        menu.addItem(NSMenuItem(title: "Test Dictation", action: #selector(testDictation), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
+        
+        // PREFERENCES MENU ITEM
+        menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ","))
+        menu.addItem(NSMenuItem.separator())
+        
+        menu.addItem(NSMenuItem(title: "About MantaScribe Pro", action: #selector(showAbout), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApplication), keyEquivalent: "q"))
+        
+        statusBarItem.menu = menu
+        
+        // Set targets for menu items
+        for item in menu.items {
+            item.target = self
+        }
+    }
+    
+    // MARK: - Preferences Action
+    
+    @objc private func showPreferences() {
+        PreferencesWindowController.shared.showPreferences()
+        print("🔧 MenuBarController: Preferences opened from menu bar")
+    }
+    
+    // MARK: - Preference-aware Menu Updates
+    
+    private func updateMenuForPreferences() {
+        // Update menu items based on current preferences
+        
+        // Update performance mode display
+        updatePerformanceModeMenuFromPreferences()
+        
+        // Update other menu items based on preferences
+        // TODO: Add other preference-aware menu updates as needed
+    }
+    
+    private func updatePerformanceModeMenuFromPreferences() {
+        guard let performanceMenuItem = findPerformanceModeMenuItem(),
+              let performanceMenu = performanceMenuItem.submenu else { return }
+        
+        let currentMode = PreferencesManager.shared.performanceMode
+        let isSmartMode = (currentMode == .smart)
+        
+        for item in performanceMenu.items {
+            if item.action == #selector(selectSmartMode) {
+                item.state = isSmartMode ? .on : .off
+            } else if item.action == #selector(selectFastMode) {
+                item.state = isSmartMode ? .off : .on
+            }
+        }
+    }
+    
+    // MARK: - Updated Performance Mode Actions
+    
+    @objc private func selectSmartModeUpdated() {
+        // Update the preference instead of just notifying delegate
+        PreferencesManager.shared.performanceMode = .smart
+        delegate?.menuBarControllerDidRequestTogglePerformanceMode(self)
+        updatePerformanceModeMenuFromPreferences()
+    }
+    
+    @objc private func selectFastModeUpdated() {
+        // Update the preference instead of just notifying delegate
+        PreferencesManager.shared.performanceMode = .fast
+        delegate?.menuBarControllerDidRequestTogglePerformanceMode(self)
+        updatePerformanceModeMenuFromPreferences()
+    }
+    
+    // MARK: - Preference Change Handling
+    
+    private func setupPreferenceObservers() {
+        // Call this from your init method
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(preferenceDidChange(_:)),
+            name: PreferencesManager.preferenceDidChangeNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func preferenceDidChange(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            self?.updateMenuForPreferences()
+        }
+    }
+    
+
+}
+
+// MARK: - Integration Instructions
+
+/*
+To integrate preferences into your existing MenuBarController.swift:
+
+1. Add this extension to your MenuBarController.swift file
+
+2. In your MenuBarController init method, add:
+   setupPreferenceObservers()
+
+3. Replace your existing setupMenu() call with:
+   setupMenuWithPreferences()
+
+4. Optional: Replace your performance mode action methods with the updated versions:
+   - Replace selectSmartMode with selectSmartModeUpdated
+   - Replace selectFastMode with selectFastModeUpdated
+   
+   This will make the menu automatically save the user's performance mode preference.
+
+5. The menu bar will now:
+   - Include a "Preferences…" menu item
+   - Automatically update when preferences change
+   - Save performance mode selections to preferences
+   - Show the standard Mac shortcut (⌘,) for preferences
+
+Example menu structure:
+┌─────────────────────────────┐
+│ Toggle Dictation           │
+├─────────────────────────────┤
+│ Performance Mode        ►  │
+│ Target App             ►  │
+│ Medical Vocabulary     ►  │
+├─────────────────────────────┤
+│ Test Dictation            │
+├─────────────────────────────┤
+│ Preferences…           ⌘, │  ← New item
+├─────────────────────────────┤
+│ About MantaScribe Pro      │
+│ Quit                   ⌘Q │
+└─────────────────────────────┘
+*/

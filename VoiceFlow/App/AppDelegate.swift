@@ -515,3 +515,136 @@ fileprivate protocol ComponentManagerDelegate: AnyObject {
     func componentManagerDidStopDictation(_ manager: ComponentManager)
     func componentManager(_ manager: ComponentManager, didEncounterError error: Error)
 }
+
+// Add this to your existing AppDelegate.swift file
+
+// MARK: - Preferences Integration
+// Add these methods to your existing AppDelegate class
+
+extension AppDelegate {
+    
+    // MARK: - Preferences Window Management
+    
+    /// Show the preferences window
+    @IBAction func showPreferences(_ sender: Any?) {
+        PreferencesWindowController.shared.showPreferences()
+    }
+    
+    // MARK: - Preference Change Handling
+    
+    private func setupPreferenceObservers() {
+        // Call this from applicationDidFinishLaunching
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(preferenceDidChange(_:)),
+            name: PreferencesManager.preferenceDidChangeNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func preferenceDidChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let key = userInfo["key"] as? PreferencesManager.PreferenceKey else { return }
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.handlePreferenceChange(key)
+        }
+    }
+    
+    private func handlePreferenceChange(_ key: PreferencesManager.PreferenceKey) {
+        switch key {
+        case .enableAudioFeedback:
+            // Update audio feedback system
+            let enabled = PreferencesManager.shared.enableAudioFeedback
+            print("🔧 Audio feedback preference changed: \(enabled)")
+            // TODO: Update your audio feedback system
+            
+        case .globalHotkey:
+            // Update global hotkey monitoring
+            let hotkey = PreferencesManager.shared.globalHotkey
+            print("🔧 Global hotkey preference changed: \(hotkey)")
+            // TODO: Update your hotkey monitoring system
+            
+        case .bufferTimeout:
+            // Update buffer timeout
+            let timeout = PreferencesManager.shared.bufferTimeout
+            print("🔧 Buffer timeout preference changed: \(timeout)s")
+            // TODO: Update your speech buffer timeout
+            
+        case .defaultTargetApp:
+            // Update default target app
+            let targetApp = PreferencesManager.shared.defaultTargetApp
+            print("🔧 Default target app preference changed: \(targetApp)")
+            // TODO: Update your app target manager
+            
+        case .performanceMode:
+            // Update performance mode
+            let mode = PreferencesManager.shared.performanceMode
+            print("🔧 Performance mode preference changed: \(mode.displayName)")
+            // TODO: Update your performance mode system
+            
+        case .showStatusInMenuBar:
+            // Update menu bar visibility
+            let showStatus = PreferencesManager.shared.showStatusInMenuBar
+            print("🔧 Menu bar status preference changed: \(showStatus)")
+            // TODO: Update your menu bar controller visibility
+            
+        default:
+            print("🔧 Unhandled preference change: \(key)")
+        }
+    }
+    
+    // MARK: - Initialization Helper
+    
+    private func loadInitialPreferences() {
+        // Call this from applicationDidFinishLaunching to apply saved preferences
+        
+        // Apply performance mode
+        let mode = PreferencesManager.shared.performanceMode
+        switch mode {
+        case .smart:
+            // Enable smart mode
+            isSmartModeEnabled = true
+        case .fast:
+            // Enable fast mode
+            isSmartModeEnabled = false
+        }
+        
+        // Apply other initial preferences
+        // TODO: Apply other preference values to your systems
+        
+        print("🔧 Initial preferences loaded - Performance mode: \(mode.displayName)")
+    }
+}
+
+// MARK: - Integration Instructions
+
+/*
+To integrate these preferences into your existing AppDelegate.swift:
+
+1. Add this extension to your AppDelegate.swift file
+
+2. In your applicationDidFinishLaunching method, add:
+   setupPreferenceObservers()
+   loadInitialPreferences()
+
+3. Update your Main.storyboard:
+   - Connect the "Preferences…" menu item action to showPreferences:
+   - Control-drag from the menu item to the App Delegate
+   - Select "showPreferences:" as the action
+
+4. The preferences system will automatically:
+   - Save and load preferences from UserDefaults
+   - Notify your app when preferences change
+   - Provide a standard Mac preferences window
+   - Handle window positioning and lifecycle
+
+5. As you develop new features, you can easily make them preferences by:
+   - Adding new properties to PreferencesManager
+   - Adding UI controls to PreferencesViewController
+   - Handling the preference changes in handlePreferenceChange()
+
+Example usage in your code:
+   let timeout = PreferencesManager.shared.bufferTimeout
+   let isSmartMode = PreferencesManager.shared.performanceMode == .smart
+*/
