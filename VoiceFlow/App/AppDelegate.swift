@@ -1,5 +1,5 @@
 /*
- * MantaScribe - AppDelegate.swift - Clean Mode Integration with Voice Commands
+ * MantaScribe - AppDelegate.swift - Clean Mode Integration with Performance Testing
  *
  * CLEAN ARCHITECTURE: Separated dictation modes and processing modes
  *
@@ -9,7 +9,11 @@
  *
  * PROCESSING MODES:
  * - Fast: Minimal processing for maximum speed
- * - Smart: Full features (future re-integration point)
+ * - Smart: Full features with granular performance testing
+ *
+ * PERFORMANCE TESTING:
+ * - Toggle individual smart features on/off to measure impact
+ * - Detailed timing logs for each feature component
  *
  * VOICE COMMANDS:
  * - Processed before text transcription
@@ -19,7 +23,7 @@
  * - No double transcription
  * - Clean mode separation
  * - Voice command architecture ready
- * - Future-ready for smart features
+ * - Performance testing framework
  * - Optimized performance
  */
 
@@ -48,7 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Processes voice commands before text transcription
     private var voiceCommandProcessor: VoiceCommandProcessor!
     
-    /// Coordinates SmartText processing (only used in Smart Mode)
+    /// Coordinates SmartText processing with performance testing framework
     private var smartTextCoordinator: SmartTextCoordinator!
     
     /// Tracks processed text for duplicate detection and workflow continuity
@@ -82,10 +86,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Connect voice commands to app target manager
         voiceCommandProcessor.setAppTargetManager(componentManager.appTargetManager)
         
-        // Initialize SmartText coordination system (for future Smart Mode)
+        // Initialize SmartText coordination system with performance testing
         smartTextCoordinator = SmartTextCoordinator()
+        connectSmartTextCoordinator()
         
-        print("🏗️ MantaScribe: Clean architecture initialized with \(componentManager.componentCount) components + voice commands")
+        print("🏗️ MantaScribe: Clean architecture initialized with \(componentManager.componentCount) components + voice commands + performance testing")
+    }
+    
+    private func connectSmartTextCoordinator() {
+        // Pass reference so DictationEngine can check feature flags
+        componentManager.dictationEngine.setSmartTextCoordinator(smartTextCoordinator)
     }
     
     private func requestRequiredPermissions() {
@@ -100,7 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func logApplicationReady() {
         let targetApp = componentManager.currentTargetApp
         let vocabularyCount = VocabularyManager.shared.getContextualStrings().count
-        let modeStatus = isSmartModeEnabled ? "Smart Mode (Future Features)" : "Fast Mode (Performance Optimized)"
+        let modeStatus = isSmartModeEnabled ? "Smart Mode (Performance Testing)" : "Fast Mode (Performance Optimized)"
         let commandCount = voiceCommandProcessor.getAvailableCommands().count
         
         print("""
@@ -112,7 +122,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ⌨️ Hotkey: Right Option (toggle & push-to-talk modes)
         ⚡ Performance: \(modeStatus)
         🎤 Voice Commands: \(commandCount) commands available
-        🏗️ Architecture: Clean mode separation
+        🏗️ Architecture: Clean mode separation + performance testing
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         Ready for professional medical dictation workflows!
         
@@ -149,10 +159,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func processWithSmartMode(_ rawText: String) {
-        // Future: Full smart processing pipeline
+        // Smart mode: use performance testing framework
         let processedText = applyBasicProcessing(to: rawText)
         
-        // Future: SmartText intelligence
+        // SmartText intelligence with performance testing
         smartTextCoordinator.processAndSend(
             text: processedText,
             targetApp: componentManager.currentTargetApp,
@@ -206,7 +216,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         let newMode = isSmartModeEnabled ? "Smart Mode" : "Fast Mode"
         let description = isSmartModeEnabled ?
-            "Future features: smart text, medical vocabulary, intelligent formatting" :
+            "Performance testing: toggle individual smart features on/off" :
             "Performance optimized: basic dictation with minimal processing"
             
         showModeChangeAlert(mode: newMode, description: description)
@@ -474,36 +484,6 @@ extension ComponentManager: MenuBarControllerDelegate {
     }
 }
 
-// MARK: - SmartText Coordinator (Future Smart Mode Integration)
-
-/// Coordinates all SmartText components for future smart mode re-integration
-fileprivate class SmartTextCoordinator {
-    
-    // Future smart mode integration point
-    // Will be re-enabled when smart mode is fully implemented
-    
-    /// Process text with future SmartText intelligence
-    func processAndSend(
-        text: String,
-        targetApp: AppTargetManager.TargetApp,
-        appTargetManager: AppTargetManager,
-        completion: @escaping (AppTargetManager.AppSwitchResult) -> Void
-    ) {
-        
-        print("🧠 SmartText processing (future): '\(text)'")
-        
-        // Future: Smart analysis and processing
-        // For now: Direct send with basic formatting
-        appTargetManager.sendText(
-            text,
-            shouldCapitalize: false,
-            needsLeadingSpace: true,
-            needsTrailingSpace: false,
-            completion: completion
-        )
-    }
-}
-
 // MARK: - Supporting Types
 
 fileprivate protocol ComponentManagerDelegate: AnyObject {
@@ -515,136 +495,3 @@ fileprivate protocol ComponentManagerDelegate: AnyObject {
     func componentManagerDidStopDictation(_ manager: ComponentManager)
     func componentManager(_ manager: ComponentManager, didEncounterError error: Error)
 }
-
-// Add this to your existing AppDelegate.swift file
-
-// MARK: - Preferences Integration
-// Add these methods to your existing AppDelegate class
-
-extension AppDelegate {
-    
-    // MARK: - Preferences Window Management
-    
-    /// Show the preferences window
-    @IBAction func showPreferences(_ sender: Any?) {
-        PreferencesWindowController.shared.showPreferences()
-    }
-    
-    // MARK: - Preference Change Handling
-    
-    private func setupPreferenceObservers() {
-        // Call this from applicationDidFinishLaunching
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(preferenceDidChange(_:)),
-            name: PreferencesManager.preferenceDidChangeNotification,
-            object: nil
-        )
-    }
-    
-    @objc private func preferenceDidChange(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let key = userInfo["key"] as? PreferencesManager.PreferenceKey else { return }
-        
-        DispatchQueue.main.async { [weak self] in
-            self?.handlePreferenceChange(key)
-        }
-    }
-    
-    private func handlePreferenceChange(_ key: PreferencesManager.PreferenceKey) {
-        switch key {
-        case .enableAudioFeedback:
-            // Update audio feedback system
-            let enabled = PreferencesManager.shared.enableAudioFeedback
-            print("🔧 Audio feedback preference changed: \(enabled)")
-            // TODO: Update your audio feedback system
-            
-        case .globalHotkey:
-            // Update global hotkey monitoring
-            let hotkey = PreferencesManager.shared.globalHotkey
-            print("🔧 Global hotkey preference changed: \(hotkey)")
-            // TODO: Update your hotkey monitoring system
-            
-        case .bufferTimeout:
-            // Update buffer timeout
-            let timeout = PreferencesManager.shared.bufferTimeout
-            print("🔧 Buffer timeout preference changed: \(timeout)s")
-            // TODO: Update your speech buffer timeout
-            
-        case .defaultTargetApp:
-            // Update default target app
-            let targetApp = PreferencesManager.shared.defaultTargetApp
-            print("🔧 Default target app preference changed: \(targetApp)")
-            // TODO: Update your app target manager
-            
-        case .performanceMode:
-            // Update performance mode
-            let mode = PreferencesManager.shared.performanceMode
-            print("🔧 Performance mode preference changed: \(mode.displayName)")
-            // TODO: Update your performance mode system
-            
-        case .showStatusInMenuBar:
-            // Update menu bar visibility
-            let showStatus = PreferencesManager.shared.showStatusInMenuBar
-            print("🔧 Menu bar status preference changed: \(showStatus)")
-            // TODO: Update your menu bar controller visibility
-            
-        default:
-            print("🔧 Unhandled preference change: \(key)")
-        }
-    }
-    
-    // MARK: - Initialization Helper
-    
-    private func loadInitialPreferences() {
-        // Call this from applicationDidFinishLaunching to apply saved preferences
-        
-        // Apply performance mode
-        let mode = PreferencesManager.shared.performanceMode
-        switch mode {
-        case .smart:
-            // Enable smart mode
-            isSmartModeEnabled = true
-        case .fast:
-            // Enable fast mode
-            isSmartModeEnabled = false
-        }
-        
-        // Apply other initial preferences
-        // TODO: Apply other preference values to your systems
-        
-        print("🔧 Initial preferences loaded - Performance mode: \(mode.displayName)")
-    }
-}
-
-// MARK: - Integration Instructions
-
-/*
-To integrate these preferences into your existing AppDelegate.swift:
-
-1. Add this extension to your AppDelegate.swift file
-
-2. In your applicationDidFinishLaunching method, add:
-   setupPreferenceObservers()
-   loadInitialPreferences()
-
-3. Update your Main.storyboard:
-   - Connect the "Preferences…" menu item action to showPreferences:
-   - Control-drag from the menu item to the App Delegate
-   - Select "showPreferences:" as the action
-
-4. The preferences system will automatically:
-   - Save and load preferences from UserDefaults
-   - Notify your app when preferences change
-   - Provide a standard Mac preferences window
-   - Handle window positioning and lifecycle
-
-5. As you develop new features, you can easily make them preferences by:
-   - Adding new properties to PreferencesManager
-   - Adding UI controls to PreferencesViewController
-   - Handling the preference changes in handlePreferenceChange()
-
-Example usage in your code:
-   let timeout = PreferencesManager.shared.bufferTimeout
-   let isSmartMode = PreferencesManager.shared.performanceMode == .smart
-*/

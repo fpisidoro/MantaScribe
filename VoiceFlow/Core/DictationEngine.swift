@@ -41,6 +41,7 @@ class DictationEngine: NSObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var audioEngine = AVAudioEngine()
+    private var smartTextCoordinator: SmartTextCoordinator?
     
     // Mode Management
     private var dictationMode: DictationMode = .toggle
@@ -129,6 +130,10 @@ class DictationEngine: NSObject {
         delegate?.dictationEngineDidStop(self)
     }
     
+    func setSmartTextCoordinator(_ coordinator: SmartTextCoordinator) {
+        self.smartTextCoordinator = coordinator
+    }
+
     /// Check if dictation is currently active
     var isDictating: Bool {
         return isRecording
@@ -184,11 +189,19 @@ class DictationEngine: NSObject {
     }
     
     private func applySmartFeatures(to request: SFSpeechAudioBufferRecognitionRequest) {
-        // Future smart mode integration point
-        let contextualStrings = VocabularyManager.shared.getContextualStrings()
-        if !contextualStrings.isEmpty {
-            request.contextualStrings = contextualStrings
-            print("🎯 DictationEngine: Applied \(contextualStrings.count) contextual strings")
+        // Apply contextual strings only if enabled in SmartTextCoordinator
+        let shouldApplyContextualStrings = smartTextCoordinator?.enableContextualStrings ?? true
+        
+        if shouldApplyContextualStrings {
+            let contextualStrings = VocabularyManager.shared.getContextualStrings()
+            if !contextualStrings.isEmpty {
+                request.contextualStrings = contextualStrings
+                print("🎯 DictationEngine: Applied \(contextualStrings.count) contextual strings")
+            } else {
+                print("⚠️ DictationEngine: No contextual strings available!")
+            }
+        } else {
+            print("⚡ DictationEngine: Contextual strings DISABLED for performance testing")
         }
     }
     
