@@ -55,6 +55,8 @@ class DictationEngine: NSObject {
     
     // Incremental Processing (Toggle Mode)
     private var lastProcessedText = ""
+    private var lastProcessedTimestamp = Date.distantPast
+    private var consecutiveSkips = 0
     
     // Push-to-Talk Final Result Handling
     private var isWaitingForFinalResult = false
@@ -340,6 +342,7 @@ class DictationEngine: NSObject {
         }
     }
     
+    // EXISTING METHOD: Only modify the parts shown below
     private func processIncrementalText(_ newText: String) {
         guard !isCurrentlyProcessing else {
             print("🚫 Skipping incremental processing - already processing")
@@ -355,11 +358,24 @@ class DictationEngine: NSObject {
         if !textToSend.isEmpty {
             print("📝 Incremental processing (toggle): '\(textToSend)'")
             lastProcessedText = newText
+            lastProcessedTimestamp = Date()  // NEW: Track successful processing time
+            consecutiveSkips = 0  // NEW: Reset skip counter on success
             
             // Send incremental text to delegate
             delegate?.dictationEngine(self, didProcessText: textToSend)
         } else {
             print("🔄 No new text to send (duplicate or subset)")
+            
+            // NEW: Escape valve - prevent infinite stuck states
+            consecutiveSkips += 1
+            if consecutiveSkips >= 3 {
+                print("🚨 Escape valve triggered after \(consecutiveSkips) consecutive skips")
+                print("🚨 Forcing reset to prevent stuck state")
+                lastProcessedText = ""
+                lastProcessedTimestamp = Date.distantPast
+                consecutiveSkips = 0
+                // Don't process current text, just reset for next attempt
+            }
         }
         
         isCurrentlyProcessing = false
@@ -375,67 +391,85 @@ class DictationEngine: NSObject {
     
     // MARK: - REFINED: Smart Sentence Boundary Detection + Improved Mid-Sentence Correction Filtering
     
-    private func extractIncrementalText(_ newText: String) -> String {
-        // Handle incremental text extraction with smart sentence boundary detection
-        if lastProcessedText.isEmpty {
-            // First text, send everything
-            return newText
-        }
-        
-        // Split into words for smart comparison
-        let previousWords = lastProcessedText.split(separator: " ")
-        let currentWords = newText.split(separator: " ")
-        
-        print("🔍 Word extraction - Previous: \(previousWords.count) words, Current: \(currentWords.count) words")
-        
-        // Find longest common word sequence from the start
-        var commonWordCount = 0
-        let minWordCount = min(previousWords.count, currentWords.count)
-        
-        for i in 0..<minWordCount {
-            if previousWords[i] == currentWords[i] {
-                commonWordCount += 1
-            } else {
-                print("🔍 Word difference at position \(i): '\(previousWords[i])' vs '\(currentWords[i])'")
-                break
-            }
-        }
-        
-        print("🔍 Common words from start: \(commonWordCount)")
-        
-        // REFINED: Check for mid-sentence corrections during pauses
-        if isLikelyPauseCorrection(previousWords, currentWords, commonWordCount) {
-            print("📝 Mid-sentence correction detected - skipping to avoid partial phrases")
-            return ""
-        }
-        
-        // FIXED: Better sentence boundary detection
-        if commonWordCount == 0 && previousWords.count > 0 {
-            // User started completely new sentence - send the entire new sentence
-            print("📝 New sentence detected - sending complete new sentence: '\(newText)'")
-            return newText
-        } else if currentWords.count > commonWordCount {
-            // User added to existing sentence - send only new words
-            let newWords = Array(currentWords[commonWordCount...])
-            let result = newWords.joined(separator: " ")
-            print("📝 Sending new words: '\(result)'")
-            return result
-        } else if currentWords.count == previousWords.count && commonWordCount < currentWords.count {
-            // Same number of words but some changed in the middle (revision)
-            // Don't send anything to avoid duplicates
-            print("📝 Word revision detected - skipping to avoid duplicate")
-            return ""
-        } else if currentWords.count < previousWords.count {
-            // Current text is shorter - likely a recognition correction
-            // Don't send anything to avoid duplicates
-            print("📝 Text got shorter - likely recognition correction, skipping")
-            return ""
-        } else {
-            // Same length, all words match - this is a true duplicate
-            print("📝 True duplicate detected - skipping")
-            return ""
-        }
-    }
+    // ENHANCED METHOD: Add temporal logic to existing word comparison
+     private func extractIncrementalText(_ newText: String) -> String {
+         let now = Date()
+         
+         // Handle incremental text extraction with smart sentence boundary detection
+         if lastProcessedText.isEmpty {
+             // First text, send everything
+             lastProcessedTimestamp = now
+             return newText
+         }
+         
+         // KEEP ALL EXISTING LOGIC - Split into words for smart comparison
+         let previousWords = lastProcessedText.split(separator: " ")
+         let currentWords = newText.split(separator: " ")
+         
+         print("🔍 Word extraction - Previous: \(previousWords.count) words, Current: \(currentWords.count) words")
+         
+         // Find longest common word sequence from the start
+         var commonWordCount = 0
+         let minWordCount = min(previousWords.count, currentWords.count)
+         
+         for i in 0..<minWordCount {
+             if previousWords[i] == currentWords[i] {
+                 commonWordCount += 1
+             } else {
+                 print("🔍 Word difference at position \(i): '\(previousWords[i])' vs '\(currentWords[i])'")
+                 break
+             }
+         }
+         
+         print("🔍 Common words from start: \(commonWordCount)")
+         
+         // KEEP EXISTING: Check for mid-sentence corrections during pauses
+         if isLikelyPauseCorrection(previousWords, currentWords, commonWordCount) {
+             print("📝 Mid-sentence correction detected - skipping to avoid partial phrases")
+             return ""
+         }
+         
+         // KEEP EXISTING: Better sentence boundary detection
+         if commonWordCount == 0 && previousWords.count > 0 {
+             // User started completely new sentence - send the entire new sentence
+             print("📝 New sentence detected - sending complete new sentence: '\(newText)'")
+             lastProcessedTimestamp = now
+             return newText
+         } else if currentWords.count > commonWordCount {
+             // User added to existing sentence - send only new words
+             let newWords = Array(currentWords[commonWordCount...])
+             let result = newWords.joined(separator: " ")
+             print("📝 Sending new words: '\(result)'")
+             lastProcessedTimestamp = now
+             return result
+         } else if currentWords.count == previousWords.count && commonWordCount < currentWords.count {
+             // Same number of words but some changed in the middle (revision)
+             // Don't send anything to avoid duplicates
+             print("📝 Word revision detected - skipping to avoid duplicate")
+             return ""
+         } else if currentWords.count < previousWords.count {
+             // Current text is shorter - likely a recognition correction
+             // Don't send anything to avoid duplicates
+             print("📝 Text got shorter - likely recognition correction, skipping")
+             return ""
+         } else {
+             // ENHANCED: Same length, all words match - check if this is a processing artifact
+             let timeSinceLastProcessed = now.timeIntervalSince(lastProcessedTimestamp)
+             
+             // Most Apple recognition artifacts happen within 3-5 seconds
+             // Only allow "duplicates" if there's been a significant pause (5+ seconds)
+             if timeSinceLastProcessed < 5.0 {
+                 // Likely Apple re-processing the same audio - skip it
+                 print("📝 True duplicate detected (within \(String(format: "%.2f", timeSinceLastProcessed))s) - skipping")
+                 return ""
+             } else {
+                 // Very long gap + same words = probably intentional repeat by user
+                 print("📝 Intentional duplicate after \(String(format: "%.2f", timeSinceLastProcessed))s gap - allowing")
+                 lastProcessedTimestamp = now
+                 return newText
+             }
+         }
+     }
     
     /// REFINED: Detect mid-sentence corrections with improved punctuation handling
     private func isLikelyPauseCorrection(_ previousWords: [String.SubSequence], _ currentWords: [String.SubSequence], _ commonWordCount: Int) -> Bool {
@@ -481,6 +515,14 @@ class DictationEngine: NSObject {
         // Allow any non-alphanumeric addition (punctuation, spaces, symbols)
         return !addition.isEmpty && addition.allSatisfy { !$0.isLetter && !$0.isNumber }
     }
+    
+    // OPTIONAL: Add state reset method for manual recovery
+      func resetDuplicateDetectionState() {
+          print("🔄 Manual reset of duplicate detection state")
+          lastProcessedText = ""
+          lastProcessedTimestamp = Date.distantPast
+          consecutiveSkips = 0
+      }
     
     // MARK: - Push-to-Talk Mode Logic (Final Results Only)
     
