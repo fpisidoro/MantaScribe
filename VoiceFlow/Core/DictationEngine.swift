@@ -2,7 +2,7 @@ import Foundation
 import Speech
 import AVFoundation
 
-/// Clean dictation engine with Smart Completion Detection for toggle mode
+/// Clean dictation engine with Metadata-Based Final Result Detection
 class DictationEngine: NSObject {
     
     // MARK: - Types
@@ -11,18 +11,17 @@ class DictationEngine: NSObject {
         case idle
         case listening
         case processing
-        case waitingForCompletion  // NEW: Smart completion detection state
         case error
     }
     
     enum DictationMode {
-        case toggle        // Continuous listening with smart completion detection
-        case pushToTalk    // Accumulate until stop
+        case toggle        // Continuous listening with metadata-based finalization
+        case pushToTalk    // Stop and wait for natural final result
     }
     
     enum ProcessingMode {
-        case fast          // Current: minimal processing for speed
-        case smart         // Smart completion detection + full features
+        case fast          // Minimal processing for speed
+        case smart         // Full smart features on final results
     }
     
     enum DictationError: Error {
@@ -48,25 +47,18 @@ class DictationEngine: NSObject {
     private var dictationMode: DictationMode = .toggle
     private var processingMode: ProcessingMode = .smart
     
-    // SMART COMPLETION DETECTION - Core Properties
-    private var completionTimer: Timer?
-    private var bufferedTranscription: String = ""
-    private var lastBufferUpdate = Date()
-    private var isWaitingForCompletion = false
-    private var consecutivePartialResults = 0
-    private var lastProcessedContent = ""  // NEW: Track actual processed content
+    // METADATA-BASED PROCESSING - Simple Properties
+    private var currentPartialText = ""           // For UI feedback only
+    private var lastProcessedText = ""            // Track processed final results
+    private var isCurrentlyProcessing = false     // Prevent concurrent processing
     
-    // SMART COMPLETION DETECTION - Configuration
-    private let maxWaitTime: TimeInterval = 4.0        // Maximum wait before timeout
-    private let confidenceThreshold: Float = 0.85      // High confidence threshold
-    private let naturalPauseTime: TimeInterval = 1.5   // Natural pause detection
-    private let medicalPauseTime: TimeInterval = 1.2   // Medical phrase completion time
+    // Push-to-Talk Support
+    private var isWaitingForFinalResult = false   // Push-to-talk completion tracking
+    private var pushToTalkBackgroundQueue: DispatchQueue? // Background processing for push-to-talk
     
-    // Legacy Properties (for push-to-talk and fallback)
-    private var currentBuffer = ""
-    private var hasProcessedBuffer = false
-    private var isCurrentlyProcessing = false
-    private var isWaitingForFinalResult = false
+    // Cold Start Management
+    private var isSystemWarmedUp = false          // Track if first successful recognition happened
+    private var startAttemptCount = 0             // Count start attempts for debugging
     
     // State
     private(set) var state: DictationState = .idle
@@ -110,7 +102,7 @@ class DictationEngine: NSObject {
         print("🎙️ DictationEngine: Starting \(dictationMode) dictation with \(processingMode) processing")
         
         setState(.listening)
-        resetBuffer()
+        resetSession()
         setupRecognitionRequest()
         setupAudioEngine()
         startAudioEngine()
@@ -127,16 +119,18 @@ class DictationEngine: NSObject {
         // Mode-specific stop behavior
         switch dictationMode {
         case .toggle:
+            // Toggle mode: Stop immediately
             handleToggleStop()
+            cleanupRecognition()
+            setState(.idle)
+            isRecording = false
+            delegate?.dictationEngineDidStop(self)
+            
         case .pushToTalk:
+            // Push-to-talk: Wait for final result before cleanup
             handlePushToTalkStop()
+            // Note: cleanup will be called from handleStreamEnd() or timeout
         }
-        
-        cleanupRecognition()
-        setState(.idle)
-        
-        isRecording = false
-        delegate?.dictationEngineDidStop(self)
     }
     
     func setSmartTextCoordinator(_ coordinator: SmartTextCoordinator) {
@@ -161,23 +155,14 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Speech recognizer initialized")
     }
     
-    private func resetBuffer() {
-        // Smart Completion Detection reset
-        bufferedTranscription = ""
-        isWaitingForCompletion = false
-        consecutivePartialResults = 0
-        completionTimer?.invalidate()
-        lastBufferUpdate = Date()
-        
-        // Legacy reset (for push-to-talk)
-        currentBuffer = ""
-        hasProcessedBuffer = false
+    private func resetSession() {
+        // Reset metadata-based processing state
+        currentPartialText = ""
+        lastProcessedText = ""
         isCurrentlyProcessing = false
         isWaitingForFinalResult = false
         
-        // NEW: Reset fast mode tracking
-        lastFastModeText = ""
-        lastProcessedContent = ""
+        print("🎤 DictationEngine: Session reset for metadata-based processing")
     }
     
     private func setupRecognitionRequest() {
@@ -269,6 +254,24 @@ class DictationEngine: NSObject {
             
             if let error = error {
                 print("❌ DictationEngine: Recognition error: \(error.localizedDescription)")
+                
+                // Check for cold start issues and auto-retry
+                if !self.isSystemWarmedUp && self.startAttemptCount <= 2 {
+                    print("🌡️ DictationEngine: Cold start error detected - auto-retrying in 0.5s (attempt \(self.startAttemptCount)/2)")
+                    
+                    // Auto-retry after brief delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        print("🔄 DictationEngine: Auto-retry starting...")
+                        self.startDictation()
+                    }
+                    return
+                }
+                
+                // If still failing after retries, give up and report error
+                if !self.isSystemWarmedUp {
+                    print("😱 DictationEngine: Cold start failed after retries - system may have issues")
+                }
+                
                 DispatchQueue.main.async {
                     let dictationError = DictationError.recognitionTaskFailed(error)
                     self.delegate?.dictationEngine(self, didEncounterError: dictationError)
@@ -280,249 +283,141 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Recognition task started")
     }
     
-    // MARK: - Recognition Result Handling
+    // MARK: - Metadata-Based Recognition Result Handling
     
     private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
         let text = result.bestTranscription.formattedString
         
-        // Calculate average confidence from segments
+        // Log Apple's result metadata for debugging
+        let hasMetadata = result.speechRecognitionMetadata != nil
+        print("🎤 Apple result: text='\(text)', isFinal=\(result.isFinal), hasMetadata=\(hasMetadata)")
+        
+        if hasMetadata {
+            // TRUE final result with metadata - process immediately
+            handleTrueFinalResult(text: text, result: result)
+        } else {
+            // Partial result - update for UI feedback only
+            handlePartialResult(text: text)
+        }
+        
+        // Handle stream end (when isFinal = true)
+        if result.isFinal {
+            handleStreamEnd()
+        }
+    }
+    
+    // MARK: - New Metadata-Based Result Processing
+    
+    private func handleTrueFinalResult(text: String, result: SFSpeechRecognitionResult) {
+        guard !isCurrentlyProcessing else {
+            print("😫 Skipping final result processing - already processing")
+            return
+        }
+        
+        let textToProcess = text.trimmingCharacters(in: .whitespaces)
+        
+        // Skip empty results
+        guard !textToProcess.isEmpty else {
+            print("😫 Skipping empty final result")
+            return
+        }
+        
+        // Skip duplicates
+        guard textToProcess != lastProcessedText else {
+            print("😫 Skipping duplicate final result: '\(textToProcess)'")
+            return
+        }
+        
+        isCurrentlyProcessing = true
+        lastProcessedText = textToProcess
+        
+        // For push-to-talk, cancel background processing since we got the final result
+        if dictationMode == .pushToTalk && isWaitingForFinalResult {
+            print("🎤 Push-to-talk: Got metadata result, cancelling background processing")
+            isWaitingForFinalResult = false
+        }
+        
+        // Calculate confidence from segments (should be reliable now)
         let confidence: Float
         if !result.bestTranscription.segments.isEmpty {
             let totalConfidence = result.bestTranscription.segments.reduce(0.0) { $0 + $1.confidence }
             confidence = totalConfidence / Float(result.bestTranscription.segments.count)
         } else {
-            confidence = 0.5 // Default moderate confidence
+            confidence = 0.5
         }
         
-        // Always update legacy buffer for push-to-talk compatibility
-        currentBuffer = text
+        print("🎤 ✨ Processing FINAL result: '\(textToProcess)' (confidence: \(String(format: "%.2f", confidence)))")
         
-        if result.isFinal {
-            handleFinalResult(text: text, confidence: confidence)
-        } else {
-            handlePartialResult(text: text, confidence: confidence)
-        }
-    }
-    
-    private func handleFinalResult(text: String, confidence: Float) {
         DispatchQueue.main.async {
-            switch self.dictationMode {
-            case .toggle:
-                self.handleToggleFinalResult(text: text, confidence: confidence)
-            case .pushToTalk:
-                self.handlePushToTalkFinalResult(text: text)
-            }
-        }
-    }
-    
-    private func handlePartialResult(text: String, confidence: Float) {
-        switch dictationMode {
-        case .toggle:
-            if processingMode == .smart {
-                handleSmartTogglePartialResult(text: text, confidence: confidence)
-            } else {
-                handleFastTogglePartialResult(text: text)
-            }
-        case .pushToTalk:
-            handlePushToTalkPartialResult(text: text)
-        }
-    }
-    
-    // MARK: - SMART COMPLETION DETECTION - Toggle Mode Logic
-    
-    private func handleSmartTogglePartialResult(text: String, confidence: Float) {
-        // Update buffer and tracking
-        bufferedTranscription = text
-        lastBufferUpdate = Date()
-        consecutivePartialResults += 1
-        
-        // Log activity for debugging
-        print("🧠 Smart buffering (\(consecutivePartialResults)): '\(text)' (confidence: \(String(format: "%.2f", confidence)))")
-        
-        // Check for completion signals
-        if shouldProcessNow(text: text, confidence: confidence) {
-            processBufferedText()
-        } else {
-            // Not ready yet - update state and continue buffering
-            if !isWaitingForCompletion {
-                setState(.waitingForCompletion)
-                startCompletionTimer()
-            }
-        }
-    }
-    
-    private func handleToggleFinalResult(text: String, confidence: Float) {
-        // Final result in toggle mode - process immediately if we have content
-        if !text.isEmpty && !hasProcessedBuffer {
-            print("🔄 Toggle final result: '\(text)'")
-            bufferedTranscription = text
-            processBufferedText()
-        }
-    }
-    
-    private func handleToggleStop() {
-        // Toggle mode stop: Process any buffered text before stopping
-        if !bufferedTranscription.isEmpty && !hasProcessedBuffer {
-            print("🔄 Toggle stop: Processing buffered text: '\(bufferedTranscription)'")
-            processBufferedText()
-        }
-    }
-    
-    // MARK: - SMART COMPLETION DETECTION - Core Logic
-    
-    private func shouldProcessNow(text: String, confidence: Float) -> Bool {
-        // Don't process if we already did
-        if hasProcessedBuffer { return false }
-        
-        // Must have substantial content
-        if text.trimmingCharacters(in: .whitespaces).isEmpty { return false }
-        
-        // Check completion signals in priority order
-        
-        // 1. STRONG COMPLETION: Definitive punctuation
-        if hasStrongPunctuation(text) {
-            print("🧠 ✅ Strong punctuation completion detected")
-            return true
-        }
-        
-        // 2. MEDICAL COMPLETION: Professional phrase patterns
-        if hasMedicalCompletion(text) {
-            print("🧠 ✅ Medical phrase completion detected")
-            return true
-        }
-        
-        // 3. HIGH CONFIDENCE + NATURAL PAUSE: Quality speech with silence
-        if confidence >= confidenceThreshold && hasNaturalPause() {
-            print("🧠 ✅ High confidence + natural pause completion detected")
-            return true
-        }
-        
-        // 4. EMERGENCY TIMEOUT: Prevent infinite buffering
-        let bufferAge = Date().timeIntervalSince(lastBufferUpdate)
-        if bufferAge >= maxWaitTime {
-            print("🧠 ⏰ Emergency timeout completion (waited \(String(format: "%.1f", bufferAge))s)")
-            return true
-        }
-        
-        // Not ready to process yet
-        return false
-    }
-    
-    private func hasStrongPunctuation(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        return trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?")
-    }
-    
-    private func hasMedicalCompletion(_ text: String) -> Bool {
-        let lowercased = text.lowercased()
-        let medicalCompletions = [
-            "years old", "was normal", "was abnormal", "follow up", 
-            "discharged", "admitted", "prescribed", "advised", 
-            "recommended", "unremarkable", "significant for",
-            "consistent with", "suggestive of", "compatible with"
-        ]
-        
-        return medicalCompletions.contains { lowercased.hasSuffix($0) }
-    }
-    
-    private func hasNaturalPause() -> Bool {
-        let timeSinceUpdate = Date().timeIntervalSince(lastBufferUpdate)
-        return timeSinceUpdate >= naturalPauseTime
-    }
-    
-    private func startCompletionTimer() {
-        completionTimer?.invalidate()
-        
-        // Start timer for emergency timeout
-        completionTimer = Timer.scheduledTimer(withTimeInterval: maxWaitTime, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                
-                if self.isWaitingForCompletion && !self.bufferedTranscription.isEmpty {
-                    print("🧠 ⏰ Completion timer fired - processing buffered text")
-                    self.processBufferedText()
-                }
-            }
-        }
-        
-        isWaitingForCompletion = true
-        print("🧠 ⏲️ Started completion timer (\(maxWaitTime)s)")
-    }
-    
-    private func processBufferedText() {
-        guard !isCurrentlyProcessing else {
-            print("🚫 Skipping buffered processing - already processing")
-            return
-        }
-        
-        guard !bufferedTranscription.isEmpty else {
-            print("🚫 No buffered text to process")
-            return
-        }
-        
-        // NEW: Check if we already processed this exact text to prevent duplicates
-        let textToProcess = bufferedTranscription.trimmingCharacters(in: .whitespaces)
-        if hasProcessedBuffer || textToProcess == lastProcessedContent {
-            print("🚫 Already processed buffered text or duplicate content - skipping")
-            return
-        }
-        
-        isCurrentlyProcessing = true
-        hasProcessedBuffer = true
-        isWaitingForCompletion = false
-        completionTimer?.invalidate()
-        
-        print("🧠 ✨ Processing complete buffered text: '\(textToProcess)'")
-        
-        // NEW: Track this content as processed
-        lastProcessedContent = textToProcess
-        
-        setState(.processing)
-        
-        // Send complete text to delegate for smart processing
-        delegate?.dictationEngine(self, didProcessText: textToProcess)
-        
-        // Clear buffer and reset processing flag
-        bufferedTranscription = ""
-        consecutivePartialResults = 0
-        isCurrentlyProcessing = false
-        
-        // Quick reset for next completion cycle - but keep hasProcessedBuffer = true
-        // to prevent double processing until we get truly new content
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.setState(.processing)
+            
+            // Send to delegate for processing
+            self.delegate?.dictationEngine(self, didProcessText: textToProcess)
+            
+            // Reset processing flag
+            self.isCurrentlyProcessing = false
+            
+            // Return to listening if still recording
             if self.isRecording {
                 self.setState(.listening)
             }
-            // NOTE: hasProcessedBuffer stays true until next dictation session
         }
     }
     
-    // MARK: - FAST MODE - Toggle Mode Logic (Legacy)
+    private func handlePartialResult(text: String) {
+        // Update partial text for potential UI feedback (future feature)
+        currentPartialText = text
+        
+        // Mark system as warmed up on first successful partial result
+        if !isSystemWarmedUp {
+            isSystemWarmedUp = true
+            startAttemptCount = 0  // Reset counter after successful warm-up
+            print("🌡️ DictationEngine: System warmed up - first recognition successful")
+        }
+        
+        // Log partial results for debugging (can be removed later)
+        if !text.isEmpty {
+            print("🎤 🔄 Partial result: '\(text)' (UI feedback only)")
+        }
+    }
     
-    private var lastFastModeText = ""  // NEW: Track last processed text in fast mode
+    private func handleStreamEnd() {
+        print("🎤 🟥 Recognition stream ended (isFinal=true)")
+        
+        // Handle mode-specific stream end logic
+        switch dictationMode {
+        case .toggle:
+            // For toggle mode, stream end just means this recognition cycle is complete
+            // We continue listening until user manually stops
+            break
+        case .pushToTalk:
+            // For push-to-talk using immediate processing, stream end is just informational
+            // The stop sequence was already handled in handlePushToTalkStop()
+            print("🎤 Push-to-talk: Stream end (already processed with immediate method)")
+        }
+    }
     
-    private func handleFastTogglePartialResult(text: String) {
-        // Fast mode: Use simplified immediate processing for speed
-        if !hasProcessedBuffer && !text.isEmpty {
-            currentBuffer = text
-            
-            DispatchQueue.main.async {
-                self.setState(.processing)
-            }
-            
-            // Simple timeout for fast processing
-            let timeout = text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?") ? 0.3 : 0.6
-            
-            Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+    // MARK: - Mode-Specific Stop Handling
+    
+    private func handleToggleStop() {
+        // For toggle mode, we just stop - but add fallback for metadata issues
+        print("🎤 Toggle mode: Clean stop - checking for unprocessed text")
+        
+        // FALLBACK: If we have partial text but never got metadata result, process it
+        if !currentPartialText.isEmpty && currentPartialText != lastProcessedText {
+            let textToProcess = currentPartialText.trimmingCharacters(in: .whitespaces)
+            if !textToProcess.isEmpty {
+                print("🎤 Toggle mode: Processing partial text as fallback: '\(textToProcess)'")
+                lastProcessedText = textToProcess
+                
                 DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    if !self.hasProcessedBuffer && self.isRecording && !self.currentBuffer.isEmpty {
-                        // NEW: Check for duplicates in fast mode
-                        if self.currentBuffer != self.lastFastModeText {
-                            self.processSimpleText(self.currentBuffer)
-                        } else {
-                            print("⚡ Fast mode: Skipping duplicate text '\(self.currentBuffer)'")
-                            self.hasProcessedBuffer = false  // Reset to allow next different text
+                    self.setState(.processing)
+                    self.delegate?.dictationEngine(self, didProcessText: textToProcess)
+                    
+                    // Brief delay then reset to idle
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if !self.isRecording {
+                            self.setState(.idle)
                         }
                     }
                 }
@@ -530,125 +425,63 @@ class DictationEngine: NSObject {
         }
     }
     
-    private func processSimpleText(_ text: String) {
-        guard !isCurrentlyProcessing else { return }
-        
-        isCurrentlyProcessing = true
-        hasProcessedBuffer = true
-        
-        let textToProcess = text.trimmingCharacters(in: .whitespaces)
-        print("⚡ Fast processing: '\(textToProcess)'")
-        
-        // NEW: Track processed text to prevent duplicates
-        lastFastModeText = text
-        
-        delegate?.dictationEngine(self, didProcessText: textToProcess)
-        
-        currentBuffer = ""
-        isCurrentlyProcessing = false
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.hasProcessedBuffer = false
-            if self.isRecording {
-                self.setState(.listening)
-            }
-        }
-    }
-    
-    // MARK: - Push-to-Talk Mode Logic (Unchanged)
-    
-    private func handlePushToTalkFinalResult(text: String) {
-        if isWaitingForFinalResult && !text.isEmpty {
-            print("📱 Push-to-talk final result: '\(text)'")
-            isWaitingForFinalResult = false
-            finalizePushToTalkSession(with: text)
-        }
-    }
-    
-    private func finalizePushToTalkSession(with text: String) {
-        if !text.isEmpty {
-            processCompleteText(text)
-        }
-        
-        cleanupRecognition()
-        setState(.idle)
-        delegate?.dictationEngineDidStop(self)
-    }
-    
-    private func handlePushToTalkPartialResult(text: String) {
-        currentBuffer = text
-        print("📱 Push-to-talk accumulating: '\(text)'")
-    }
-    
     private func handlePushToTalkStop() {
-        if !currentBuffer.isEmpty {
-            print("📝 Push-to-talk stop: Checking for ongoing speech...")
-            
-            let wasRecentlySpeaking = checkRecentSpeechActivity()
-            
-            if wasRecentlySpeaking {
-                print("📝 Push-to-talk: Recent speech detected - delaying stop for 800ms")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    self.finalizeStopPushToTalk()
-                }
-            } else {
-                print("📝 Push-to-talk: No recent speech - stopping immediately")
-                finalizeStopPushToTalk()
-            }
-        } else {
-            print("📝 Push-to-talk stop: No buffer to process")
-            finalizePushToTalkSession(with: "")
-        }
-    }
-    
-    private func checkRecentSpeechActivity() -> Bool {
-        let bufferLength = currentBuffer.count
-        if bufferLength > 0 {
-            print("📝 Buffer analysis: \(bufferLength) characters - assuming potential tail speech")
-            return bufferLength > 10
-        }
-        return false
-    }
-    
-    private func finalizeStopPushToTalk() {
-        print("📝 Push-to-talk: Finalizing stop sequence")
-        isWaitingForFinalResult = true
+        // For push-to-talk, start background processing and return immediately
+        print("🎤 Push-to-talk: Starting background processing, UI responsive immediately")
         
+        // Create background queue for processing
+        pushToTalkBackgroundQueue = DispatchQueue(label: "pushToTalkProcessing", qos: .userInitiated)
+        
+        // Signal end of audio input
         recognitionRequest?.endAudio()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            if self.isWaitingForFinalResult && !self.currentBuffer.isEmpty {
-                print("📝 Push-to-talk: Final result timeout - processing current buffer")
-                self.isWaitingForFinalResult = false
-                self.finalizePushToTalkSession(with: self.currentBuffer)
+        // Set flag to expect final result
+        isWaitingForFinalResult = true
+        
+        // Start background processing that won't be cancelled
+        pushToTalkBackgroundQueue?.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Wait for metadata result on background thread
+            var waitCount = 0
+            let maxWaitCycles = 30 // 3 seconds total (30 * 0.1s)
+            
+            while self.isWaitingForFinalResult && waitCount < maxWaitCycles {
+                Thread.sleep(forTimeInterval: 0.1) // Check every 100ms
+                waitCount += 1
             }
+            
+            // If we timed out without getting metadata result, process partial text
+            if self.isWaitingForFinalResult {
+                print("🎤 Push-to-talk: Background timeout - processing partial text")
+                DispatchQueue.main.async {
+                    if !self.currentPartialText.isEmpty {
+                        let textToProcess = self.currentPartialText.trimmingCharacters(in: .whitespaces)
+                        if !textToProcess.isEmpty && textToProcess != self.lastProcessedText {
+                            print("🎤 Push-to-talk: Processing partial text: '\(textToProcess)'")
+                            self.lastProcessedText = textToProcess
+                            self.delegate?.dictationEngine(self, didProcessText: textToProcess)
+                        }
+                    }
+                    self.isWaitingForFinalResult = false
+                }
+            }
+        }
+        
+        // Complete UI stop sequence immediately (user sees immediate response)
+        DispatchQueue.main.async {
+            self.finalizePushToTalkStop()
         }
     }
     
-    private func processCompleteText(_ text: String) {
-        guard !isCurrentlyProcessing else {
-            print("🚫 Skipping complete text processing - already processing")
-            return
-        }
-        
-        isCurrentlyProcessing = true
-        
-        let textToProcess = text.trimmingCharacters(in: .whitespaces)
-        print("📝 Complete processing (push-to-talk): '\(textToProcess)'")
-        
-        hasProcessedBuffer = true
-        currentBuffer = ""
-        
-        delegate?.dictationEngine(self, didProcessText: textToProcess)
-        
-        isCurrentlyProcessing = false
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.hasProcessedBuffer = false
-            if self.isRecording {
-                self.setState(.listening)
-            }
-        }
+    /// Complete the push-to-talk stop sequence with cleanup
+    private func finalizePushToTalkStop() {
+        isWaitingForFinalResult = false
+        cleanupRecognition()
+        setState(.idle)
+        isRecording = false
+        delegate?.dictationEngineDidStop(self)
+        print("🎤 Push-to-talk: Stop sequence completed")
     }
     
     // MARK: - State Management
@@ -658,34 +491,32 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine (\(dictationMode)/\(processingMode)): State → \(newState)")
     }
     
+    // MARK: - Cleanup
+    
     private func cleanupRecognition() {
-        // Smart completion cleanup
-        bufferedTranscription = ""
-        isWaitingForCompletion = false
-        consecutivePartialResults = 0
-        completionTimer?.invalidate()
-        lastProcessedContent = ""  // NEW: Clear processed content tracking
-        
-        // Legacy cleanup
-        currentBuffer = ""
-        hasProcessedBuffer = true
+        // Simple cleanup for metadata-based processing
+        currentPartialText = ""
+        lastProcessedText = ""
         isCurrentlyProcessing = false
         isWaitingForFinalResult = false
-        lastFastModeText = ""  // NEW: Clear fast mode tracking
         
+        // Clean up push-to-talk background queue
+        pushToTalkBackgroundQueue = nil
+        
+        // Stop audio engine
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
         }
         
+        // Stop recognition
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         
         recognitionRequest = nil
         recognitionTask = nil
         
-        hasProcessedBuffer = false
-        print("🎤 DictationEngine: Recognition cleaned up")
+        print("🎤 DictationEngine: Recognition cleaned up (metadata-based)")
     }
 }
 
