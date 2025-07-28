@@ -54,6 +54,7 @@ class DictationEngine: NSObject {
     private var lastBufferUpdate = Date()
     private var isWaitingForCompletion = false
     private var consecutivePartialResults = 0
+    private var lastProcessedContent = ""  // NEW: Track actual processed content
     
     // SMART COMPLETION DETECTION - Configuration
     private let maxWaitTime: TimeInterval = 4.0        // Maximum wait before timeout
@@ -173,6 +174,10 @@ class DictationEngine: NSObject {
         hasProcessedBuffer = false
         isCurrentlyProcessing = false
         isWaitingForFinalResult = false
+        
+        // NEW: Reset fast mode tracking
+        lastFastModeText = ""
+        lastProcessedContent = ""
     }
     
     private func setupRecognitionRequest() {
@@ -455,34 +460,46 @@ class DictationEngine: NSObject {
             return
         }
         
+        // NEW: Check if we already processed this exact text to prevent duplicates
+        let textToProcess = bufferedTranscription.trimmingCharacters(in: .whitespaces)
+        if hasProcessedBuffer || textToProcess == lastProcessedContent {
+            print("🚫 Already processed buffered text or duplicate content - skipping")
+            return
+        }
+        
         isCurrentlyProcessing = true
         hasProcessedBuffer = true
         isWaitingForCompletion = false
         completionTimer?.invalidate()
         
-        let textToProcess = bufferedTranscription.trimmingCharacters(in: .whitespaces)
         print("🧠 ✨ Processing complete buffered text: '\(textToProcess)'")
+        
+        // NEW: Track this content as processed
+        lastProcessedContent = textToProcess
         
         setState(.processing)
         
         // Send complete text to delegate for smart processing
         delegate?.dictationEngine(self, didProcessText: textToProcess)
         
-        // Reset buffer but continue listening
+        // Clear buffer and reset processing flag
         bufferedTranscription = ""
         consecutivePartialResults = 0
         isCurrentlyProcessing = false
         
-        // Quick reset for next completion cycle
+        // Quick reset for next completion cycle - but keep hasProcessedBuffer = true
+        // to prevent double processing until we get truly new content
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.hasProcessedBuffer = false
             if self.isRecording {
                 self.setState(.listening)
             }
+            // NOTE: hasProcessedBuffer stays true until next dictation session
         }
     }
     
     // MARK: - FAST MODE - Toggle Mode Logic (Legacy)
+    
+    private var lastFastModeText = ""  // NEW: Track last processed text in fast mode
     
     private func handleFastTogglePartialResult(text: String) {
         // Fast mode: Use simplified immediate processing for speed
@@ -500,7 +517,13 @@ class DictationEngine: NSObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     if !self.hasProcessedBuffer && self.isRecording && !self.currentBuffer.isEmpty {
-                        self.processSimpleText(self.currentBuffer)
+                        // NEW: Check for duplicates in fast mode
+                        if self.currentBuffer != self.lastFastModeText {
+                            self.processSimpleText(self.currentBuffer)
+                        } else {
+                            print("⚡ Fast mode: Skipping duplicate text '\(self.currentBuffer)'")
+                            self.hasProcessedBuffer = false  // Reset to allow next different text
+                        }
                     }
                 }
             }
@@ -515,6 +538,9 @@ class DictationEngine: NSObject {
         
         let textToProcess = text.trimmingCharacters(in: .whitespaces)
         print("⚡ Fast processing: '\(textToProcess)'")
+        
+        // NEW: Track processed text to prevent duplicates
+        lastFastModeText = text
         
         delegate?.dictationEngine(self, didProcessText: textToProcess)
         
@@ -638,12 +664,14 @@ class DictationEngine: NSObject {
         isWaitingForCompletion = false
         consecutivePartialResults = 0
         completionTimer?.invalidate()
+        lastProcessedContent = ""  // NEW: Clear processed content tracking
         
         // Legacy cleanup
         currentBuffer = ""
         hasProcessedBuffer = true
         isCurrentlyProcessing = false
         isWaitingForFinalResult = false
+        lastFastModeText = ""  // NEW: Clear fast mode tracking
         
         if audioEngine.isRunning {
             audioEngine.stop()
