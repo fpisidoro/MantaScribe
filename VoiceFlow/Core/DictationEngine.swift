@@ -2,7 +2,7 @@ import Foundation
 import Speech
 import AVFoundation
 
-/// Clean dictation engine with separated mode logic and future smart feature integration points
+/// Clean dictation engine with Smart Completion Detection for toggle mode
 class DictationEngine: NSObject {
     
     // MARK: - Types
@@ -11,17 +11,18 @@ class DictationEngine: NSObject {
         case idle
         case listening
         case processing
+        case waitingForCompletion  // NEW: Smart completion detection state
         case error
     }
     
     enum DictationMode {
-        case toggle        // Continuous listening with pause detection
+        case toggle        // Continuous listening with smart completion detection
         case pushToTalk    // Accumulate until stop
     }
     
     enum ProcessingMode {
         case fast          // Current: minimal processing for speed
-        case smart         // Future: full smart features
+        case smart         // Smart completion detection + full features
     }
     
     enum DictationError: Error {
@@ -45,20 +46,25 @@ class DictationEngine: NSObject {
     
     // Mode Management
     private var dictationMode: DictationMode = .toggle
-    private var processingMode: ProcessingMode = .fast
+    private var processingMode: ProcessingMode = .smart
     
-    // Core Buffer Management
-    private var bufferTimer: Timer?
+    // SMART COMPLETION DETECTION - Core Properties
+    private var completionTimer: Timer?
+    private var bufferedTranscription: String = ""
+    private var lastBufferUpdate = Date()
+    private var isWaitingForCompletion = false
+    private var consecutivePartialResults = 0
+    
+    // SMART COMPLETION DETECTION - Configuration
+    private let maxWaitTime: TimeInterval = 4.0        // Maximum wait before timeout
+    private let confidenceThreshold: Float = 0.85      // High confidence threshold
+    private let naturalPauseTime: TimeInterval = 1.5   // Natural pause detection
+    private let medicalPauseTime: TimeInterval = 1.2   // Medical phrase completion time
+    
+    // Legacy Properties (for push-to-talk and fallback)
     private var currentBuffer = ""
     private var hasProcessedBuffer = false
     private var isCurrentlyProcessing = false
-    
-    // Incremental Processing (Toggle Mode)
-    private var lastProcessedText = ""
-    private var lastProcessedTimestamp = Date.distantPast
-    private var consecutiveSkips = 0
-    
-    // Push-to-Talk Final Result Handling
     private var isWaitingForFinalResult = false
     
     // State
@@ -155,12 +161,18 @@ class DictationEngine: NSObject {
     }
     
     private func resetBuffer() {
+        // Smart Completion Detection reset
+        bufferedTranscription = ""
+        isWaitingForCompletion = false
+        consecutivePartialResults = 0
+        completionTimer?.invalidate()
+        lastBufferUpdate = Date()
+        
+        // Legacy reset (for push-to-talk)
         currentBuffer = ""
         hasProcessedBuffer = false
         isCurrentlyProcessing = false
         isWaitingForFinalResult = false
-        lastProcessedText = ""
-        bufferTimer?.invalidate()
     }
     
     private func setupRecognitionRequest() {
@@ -267,120 +279,193 @@ class DictationEngine: NSObject {
     
     private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
         let text = result.bestTranscription.formattedString
+        let confidence = result.bestTranscription.averageConfidence
         
-        // Always update buffer for partial results (future UI features)
+        // Always update legacy buffer for push-to-talk compatibility
         currentBuffer = text
         
         if result.isFinal {
-            handleFinalResult(text: text)
+            handleFinalResult(text: text, confidence: confidence)
         } else {
-            handlePartialResult(text: text)
+            handlePartialResult(text: text, confidence: confidence)
         }
     }
     
-    private func handleFinalResult(text: String) {
+    private func handleFinalResult(text: String, confidence: Float) {
         DispatchQueue.main.async {
-            self.bufferTimer?.invalidate()
-            
             switch self.dictationMode {
             case .toggle:
-                self.handleToggleFinalResult(text: text)
+                self.handleToggleFinalResult(text: text, confidence: confidence)
             case .pushToTalk:
                 self.handlePushToTalkFinalResult(text: text)
             }
         }
     }
     
-    private func handlePartialResult(text: String) {
+    private func handlePartialResult(text: String, confidence: Float) {
         switch dictationMode {
         case .toggle:
-            handleTogglePartialResult(text: text)
+            if processingMode == .smart {
+                handleSmartTogglePartialResult(text: text, confidence: confidence)
+            } else {
+                handleFastTogglePartialResult(text: text)
+            }
         case .pushToTalk:
             handlePushToTalkPartialResult(text: text)
         }
     }
     
-    // MARK: - Toggle Mode Logic (Incremental Processing)
+    // MARK: - SMART COMPLETION DETECTION - Toggle Mode Logic
     
-    private func handleToggleFinalResult(text: String) {
-        // In toggle mode, we primarily use partial results with timers
-        // Final results are backup in case partial results stop
-        print("🔄 Toggle final result (backup): '\(text)'")
-        if !hasProcessedBuffer && !text.isEmpty {
-            processIncrementalText(text)
+    private func handleSmartTogglePartialResult(text: String, confidence: Float) {
+        // Update buffer and tracking
+        bufferedTranscription = text
+        lastBufferUpdate = Date()
+        consecutivePartialResults += 1
+        
+        // Log activity for debugging
+        print("🧠 Smart buffering (\(consecutivePartialResults)): '\(text)' (confidence: \(String(format: "%.2f", confidence)))")
+        
+        // Check for completion signals
+        if shouldProcessNow(text: text, confidence: confidence) {
+            processBufferedText()
+        } else {
+            // Not ready yet - update state and continue buffering
+            if !isWaitingForCompletion {
+                setState(.waitingForCompletion)
+                startCompletionTimer()
+            }
         }
     }
     
-    private func handleTogglePartialResult(text: String) {
-        if !hasProcessedBuffer && !text.isEmpty {
-            currentBuffer = text
-            bufferTimer?.invalidate()
-            
-            DispatchQueue.main.async {
-                self.setState(.processing)
-            }
-            
-            // Fast timeout for incremental processing
-            let timeout = getProcessingTimeout(for: text)
-            
-            bufferTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    if !self.hasProcessedBuffer && self.isRecording && !self.currentBuffer.isEmpty {
-                        self.processIncrementalText(self.currentBuffer)
-                    }
-                }
-            }
+    private func handleToggleFinalResult(text: String, confidence: Float) {
+        // Final result in toggle mode - process immediately if we have content
+        if !text.isEmpty && !hasProcessedBuffer {
+            print("🔄 Toggle final result: '\(text)'")
+            bufferedTranscription = text
+            processBufferedText()
         }
     }
     
     private func handleToggleStop() {
-        // Toggle mode: Process any remaining text incrementally
-        if !hasProcessedBuffer && !currentBuffer.isEmpty {
-            print("🔄 Toggle stop: Processing remaining buffer incrementally: '\(currentBuffer)'")
-            processIncrementalText(currentBuffer)
+        // Toggle mode stop: Process any buffered text before stopping
+        if !bufferedTranscription.isEmpty && !hasProcessedBuffer {
+            print("🔄 Toggle stop: Processing buffered text: '\(bufferedTranscription)'")
+            processBufferedText()
         }
     }
     
-    // EXISTING METHOD: Only modify the parts shown below
-    private func processIncrementalText(_ newText: String) {
+    // MARK: - SMART COMPLETION DETECTION - Core Logic
+    
+    private func shouldProcessNow(text: String, confidence: Float) -> Bool {
+        // Don't process if we already did
+        if hasProcessedBuffer { return false }
+        
+        // Must have substantial content
+        if text.trimmingCharacters(in: .whitespaces).isEmpty { return false }
+        
+        // Check completion signals in priority order
+        
+        // 1. STRONG COMPLETION: Definitive punctuation
+        if hasStrongPunctuation(text) {
+            print("🧠 ✅ Strong punctuation completion detected")
+            return true
+        }
+        
+        // 2. MEDICAL COMPLETION: Professional phrase patterns
+        if hasMedicalCompletion(text) {
+            print("🧠 ✅ Medical phrase completion detected")
+            return true
+        }
+        
+        // 3. HIGH CONFIDENCE + NATURAL PAUSE: Quality speech with silence
+        if confidence >= confidenceThreshold && hasNaturalPause() {
+            print("🧠 ✅ High confidence + natural pause completion detected")
+            return true
+        }
+        
+        // 4. EMERGENCY TIMEOUT: Prevent infinite buffering
+        let bufferAge = Date().timeIntervalSince(lastBufferUpdate)
+        if bufferAge >= maxWaitTime {
+            print("🧠 ⏰ Emergency timeout completion (waited \(String(format: "%.1f", bufferAge))s)")
+            return true
+        }
+        
+        // Not ready to process yet
+        return false
+    }
+    
+    private func hasStrongPunctuation(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?")
+    }
+    
+    private func hasMedicalCompletion(_ text: String) -> Bool {
+        let lowercased = text.lowercased()
+        let medicalCompletions = [
+            "years old", "was normal", "was abnormal", "follow up", 
+            "discharged", "admitted", "prescribed", "advised", 
+            "recommended", "unremarkable", "significant for",
+            "consistent with", "suggestive of", "compatible with"
+        ]
+        
+        return medicalCompletions.contains { lowercased.hasSuffix($0) }
+    }
+    
+    private func hasNaturalPause() -> Bool {
+        let timeSinceUpdate = Date().timeIntervalSince(lastBufferUpdate)
+        return timeSinceUpdate >= naturalPauseTime
+    }
+    
+    private func startCompletionTimer() {
+        completionTimer?.invalidate()
+        
+        // Start timer for emergency timeout
+        completionTimer = Timer.scheduledTimer(withTimeInterval: maxWaitTime, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                
+                if self.isWaitingForCompletion && !self.bufferedTranscription.isEmpty {
+                    print("🧠 ⏰ Completion timer fired - processing buffered text")
+                    self.processBufferedText()
+                }
+            }
+        }
+        
+        isWaitingForCompletion = true
+        print("🧠 ⏲️ Started completion timer (\(maxWaitTime)s)")
+    }
+    
+    private func processBufferedText() {
         guard !isCurrentlyProcessing else {
-            print("🚫 Skipping incremental processing - already processing")
+            print("🚫 Skipping buffered processing - already processing")
+            return
+        }
+        
+        guard !bufferedTranscription.isEmpty else {
+            print("🚫 No buffered text to process")
             return
         }
         
         isCurrentlyProcessing = true
         hasProcessedBuffer = true
-        bufferTimer?.invalidate()
+        isWaitingForCompletion = false
+        completionTimer?.invalidate()
         
-        let textToSend = extractIncrementalText(newText)
+        let textToProcess = bufferedTranscription.trimmingCharacters(in: .whitespaces)
+        print("🧠 ✨ Processing complete buffered text: '\(textToProcess)'")
         
-        if !textToSend.isEmpty {
-            print("📝 Incremental processing (toggle): '\(textToSend)'")
-            lastProcessedText = newText
-            lastProcessedTimestamp = Date()  // NEW: Track successful processing time
-            consecutiveSkips = 0  // NEW: Reset skip counter on success
-            
-            // Send incremental text to delegate
-            delegate?.dictationEngine(self, didProcessText: textToSend)
-        } else {
-            print("🔄 No new text to send (duplicate or subset)")
-            
-            // NEW: Escape valve - prevent infinite stuck states
-            consecutiveSkips += 1
-            if consecutiveSkips >= 3 {
-                print("🚨 Escape valve triggered after \(consecutiveSkips) consecutive skips")
-                print("🚨 Forcing reset to prevent stuck state")
-                lastProcessedText = ""
-                lastProcessedTimestamp = Date.distantPast
-                consecutiveSkips = 0
-                // Don't process current text, just reset for next attempt
-            }
-        }
+        setState(.processing)
         
+        // Send complete text to delegate for smart processing
+        delegate?.dictationEngine(self, didProcessText: textToProcess)
+        
+        // Reset buffer but continue listening
+        bufferedTranscription = ""
+        consecutivePartialResults = 0
         isCurrentlyProcessing = false
         
-        // Quick reset for next incremental update
+        // Quick reset for next completion cycle
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             self.hasProcessedBuffer = false
             if self.isRecording {
@@ -389,185 +474,86 @@ class DictationEngine: NSObject {
         }
     }
     
-    // MARK: - REFINED: Smart Sentence Boundary Detection + Improved Mid-Sentence Correction Filtering
+    // MARK: - FAST MODE - Toggle Mode Logic (Legacy)
     
-    // ENHANCED METHOD: Add temporal logic to existing word comparison
-     private func extractIncrementalText(_ newText: String) -> String {
-         let now = Date()
-         
-         // Handle incremental text extraction with smart sentence boundary detection
-         if lastProcessedText.isEmpty {
-             // First text, send everything
-             lastProcessedTimestamp = now
-             return newText
-         }
-         
-         // KEEP ALL EXISTING LOGIC - Split into words for smart comparison
-         let previousWords = lastProcessedText.split(separator: " ")
-         let currentWords = newText.split(separator: " ")
-         
-         print("🔍 Word extraction - Previous: \(previousWords.count) words, Current: \(currentWords.count) words")
-         
-         // Find longest common word sequence from the start
-         var commonWordCount = 0
-         let minWordCount = min(previousWords.count, currentWords.count)
-         
-         for i in 0..<minWordCount {
-             if previousWords[i] == currentWords[i] {
-                 commonWordCount += 1
-             } else {
-                 print("🔍 Word difference at position \(i): '\(previousWords[i])' vs '\(currentWords[i])'")
-                 break
-             }
-         }
-         
-         print("🔍 Common words from start: \(commonWordCount)")
-         
-         // KEEP EXISTING: Check for mid-sentence corrections during pauses
-         if isLikelyPauseCorrection(previousWords, currentWords, commonWordCount) {
-             print("📝 Mid-sentence correction detected - skipping to avoid partial phrases")
-             return ""
-         }
-         
-         // KEEP EXISTING: Better sentence boundary detection
-         if commonWordCount == 0 && previousWords.count > 0 {
-             // User started completely new sentence - send the entire new sentence
-             print("📝 New sentence detected - sending complete new sentence: '\(newText)'")
-             lastProcessedTimestamp = now
-             return newText
-         } else if currentWords.count > commonWordCount {
-             // User added to existing sentence - send only new words
-             let newWords = Array(currentWords[commonWordCount...])
-             let result = newWords.joined(separator: " ")
-             print("📝 Sending new words: '\(result)'")
-             lastProcessedTimestamp = now
-             return result
-         } else if currentWords.count == previousWords.count && commonWordCount < currentWords.count {
-             // Same number of words but some changed in the middle (revision)
-             // Don't send anything to avoid duplicates
-             print("📝 Word revision detected - skipping to avoid duplicate")
-             return ""
-         } else if currentWords.count < previousWords.count {
-             // Current text is shorter - likely a recognition correction
-             // Don't send anything to avoid duplicates
-             print("📝 Text got shorter - likely recognition correction, skipping")
-             return ""
-         } else {
-             // ENHANCED: Same length, all words match - check if this is a processing artifact
-             let timeSinceLastProcessed = now.timeIntervalSince(lastProcessedTimestamp)
-             
-             // Most Apple recognition artifacts happen within 3-5 seconds
-             // Only allow "duplicates" if there's been a significant pause (5+ seconds)
-             if timeSinceLastProcessed < 5.0 {
-                 // Likely Apple re-processing the same audio - skip it
-                 print("📝 True duplicate detected (within \(String(format: "%.2f", timeSinceLastProcessed))s) - skipping")
-                 return ""
-             } else {
-                 // Very long gap + same words = probably intentional repeat by user
-                 print("📝 Intentional duplicate after \(String(format: "%.2f", timeSinceLastProcessed))s gap - allowing")
-                 lastProcessedTimestamp = now
-                 return newText
-             }
-         }
-     }
-    
-    /// REFINED: Detect mid-sentence corrections with improved punctuation handling
-    private func isLikelyPauseCorrection(_ previousWords: [String.SubSequence], _ currentWords: [String.SubSequence], _ commonWordCount: Int) -> Bool {
-        // Only flag if we have a change in the middle AND it's not just punctuation
-        guard commonWordCount > 0 && commonWordCount < previousWords.count else {
-            return false
-        }
-        
-        // Check what actually changed at the difference point
-        if commonWordCount < currentWords.count {
-            let previousWord = String(previousWords[commonWordCount])
-            let currentWord = String(currentWords[commonWordCount])
+    private func handleFastTogglePartialResult(text: String) {
+        // Fast mode: Use simplified immediate processing for speed
+        if !hasProcessedBuffer && !text.isEmpty {
+            currentBuffer = text
             
-            // If it's just punctuation/symbols being added, allow it
-            if currentWord.hasPrefix(previousWord) &&
-               currentWord.count <= previousWord.count + 3 &&  // Allow up to 3 chars of punctuation
-               isPunctuationAddition(from: previousWord, to: currentWord) {
-                print("📝 Punctuation addition detected: '\(previousWord)' → '\(currentWord)' - allowing")
-                return false
+            DispatchQueue.main.async {
+                self.setState(.processing)
             }
             
-            // If it's a real word substitution, flag it
-            if previousWord != currentWord && !currentWord.hasPrefix(previousWord) {
-                print("📝 Real word substitution: '\(previousWord)' → '\(currentWord)' - flagging as correction")
-                return true
+            // Simple timeout for fast processing
+            let timeout = text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?") ? 0.3 : 0.6
+            
+            Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    if !self.hasProcessedBuffer && self.isRecording && !self.currentBuffer.isEmpty {
+                        self.processSimpleText(self.currentBuffer)
+                    }
+                }
             }
         }
+    }
+    
+    private func processSimpleText(_ text: String) {
+        guard !isCurrentlyProcessing else { return }
         
-        // For changes in middle with word additions (not substitutions)
-        if currentWords.count > previousWords.count {
-            print("📝 Words added to middle of existing sentence - likely pause correction")
-            return true
+        isCurrentlyProcessing = true
+        hasProcessedBuffer = true
+        
+        let textToProcess = text.trimmingCharacters(in: .whitespaces)
+        print("⚡ Fast processing: '\(textToProcess)'")
+        
+        delegate?.dictationEngine(self, didProcessText: textToProcess)
+        
+        currentBuffer = ""
+        isCurrentlyProcessing = false
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.hasProcessedBuffer = false
+            if self.isRecording {
+                self.setState(.listening)
+            }
         }
-        
-        return false
     }
     
-    /// Check if the change is just punctuation/symbol addition
-    private func isPunctuationAddition(from old: String, to new: String) -> Bool {
-        guard new.hasPrefix(old) else { return false }
-        let addition = String(new.dropFirst(old.count))
-        
-        // Allow any non-alphanumeric addition (punctuation, spaces, symbols)
-        return !addition.isEmpty && addition.allSatisfy { !$0.isLetter && !$0.isNumber }
-    }
-    
-    // OPTIONAL: Add state reset method for manual recovery
-      func resetDuplicateDetectionState() {
-          print("🔄 Manual reset of duplicate detection state")
-          lastProcessedText = ""
-          lastProcessedTimestamp = Date.distantPast
-          consecutiveSkips = 0
-      }
-    
-    // MARK: - Push-to-Talk Mode Logic (Final Results Only)
+    // MARK: - Push-to-Talk Mode Logic (Unchanged)
     
     private func handlePushToTalkFinalResult(text: String) {
         if isWaitingForFinalResult && !text.isEmpty {
-            print("📱 Push-to-talk final result (Apple finalized): '\(text)'")
+            print("📱 Push-to-talk final result: '\(text)'")
             isWaitingForFinalResult = false
-            
-            // Process Apple's complete final result and finalize session
             finalizePushToTalkSession(with: text)
-        } else if !isWaitingForFinalResult {
-            // Still accumulating during active push-to-talk
-            print("📱 Push-to-talk final result accumulated: '\(text)'")
         }
     }
     
-    // New method to properly finalize push-to-talk sessions
     private func finalizePushToTalkSession(with text: String) {
         if !text.isEmpty {
             processCompleteText(text)
         }
         
-        // Now do the cleanup that was deferred from stopDictation()
         cleanupRecognition()
         setState(.idle)
         delegate?.dictationEngineDidStop(self)
     }
     
     private func handlePushToTalkPartialResult(text: String) {
-        // Push-to-talk: Just accumulate, no processing until key release
         currentBuffer = text
         print("📱 Push-to-talk accumulating: '\(text)'")
     }
     
     private func handlePushToTalkStop() {
-        // Push-to-talk: Check if user is still speaking before stopping
         if !currentBuffer.isEmpty {
             print("📝 Push-to-talk stop: Checking for ongoing speech...")
             
-            // Get the most recent transcription segments to check speech activity
             let wasRecentlySpeaking = checkRecentSpeechActivity()
             
             if wasRecentlySpeaking {
                 print("📝 Push-to-talk: Recent speech detected - delaying stop for 800ms")
-                // User was recently speaking, delay the stop to catch tail words
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                     self.finalizeStopPushToTalk()
                 }
@@ -582,16 +568,11 @@ class DictationEngine: NSObject {
     }
     
     private func checkRecentSpeechActivity() -> Bool {
-        // Check if there's been recent speech activity by looking at buffer changes
-        // This is a simple heuristic - if the buffer is growing, user is likely still speaking
         let bufferLength = currentBuffer.count
-        
         if bufferLength > 0 {
-            // If we have substantial content, assume there might be tail words
             print("📝 Buffer analysis: \(bufferLength) characters - assuming potential tail speech")
-            return bufferLength > 10  // Threshold for "substantial content"
+            return bufferLength > 10
         }
-        
         return false
     }
     
@@ -599,10 +580,8 @@ class DictationEngine: NSObject {
         print("📝 Push-to-talk: Finalizing stop sequence")
         isWaitingForFinalResult = true
         
-        // Signal end of audio input
         recognitionRequest?.endAudio()
         
-        // Wait for Apple's final result
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             if self.isWaitingForFinalResult && !self.currentBuffer.isEmpty {
                 print("📝 Push-to-talk: Final result timeout - processing current buffer")
@@ -625,56 +604,16 @@ class DictationEngine: NSObject {
         
         hasProcessedBuffer = true
         currentBuffer = ""
-        bufferTimer?.invalidate()
         
-        // Send complete text to delegate
         delegate?.dictationEngine(self, didProcessText: textToProcess)
         
         isCurrentlyProcessing = false
         
-        // Reset for next session
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.hasProcessedBuffer = false
             if self.isRecording {
                 self.setState(.listening)
             }
-        }
-    }
-    
-    // MARK: - Timing Configuration
-    
-    private enum TimingType {
-        case partial
-        case final
-    }
-    
-    private func getProcessingTimeout(for text: String) -> TimeInterval {
-        let hasPunctuation = text.hasSuffix(".") || text.hasSuffix("!") || text.hasSuffix("?")
-        
-        switch processingMode {
-        case .fast:
-            return hasPunctuation ? 0.3 : 0.6
-        case .smart:
-            // Future: confidence-based timing
-            return hasPunctuation ? 0.5 : 1.0
-        }
-    }
-    
-    private func getProcessingDelay(_ type: TimingType) -> TimeInterval {
-        switch processingMode {
-        case .fast:
-            return type == .final ? 0.1 : 0.2
-        case .smart:
-            return type == .final ? 0.3 : 0.5
-        }
-    }
-    
-    private func getResetDelay() -> TimeInterval {
-        switch processingMode {
-        case .fast:
-            return 0.5
-        case .smart:
-            return 1.0
         }
     }
     
@@ -686,11 +625,17 @@ class DictationEngine: NSObject {
     }
     
     private func cleanupRecognition() {
+        // Smart completion cleanup
+        bufferedTranscription = ""
+        isWaitingForCompletion = false
+        consecutivePartialResults = 0
+        completionTimer?.invalidate()
+        
+        // Legacy cleanup
         currentBuffer = ""
         hasProcessedBuffer = true
         isCurrentlyProcessing = false
         isWaitingForFinalResult = false
-        lastProcessedText = ""
         
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -702,7 +647,6 @@ class DictationEngine: NSObject {
         
         recognitionRequest = nil
         recognitionTask = nil
-        bufferTimer?.invalidate()
         
         hasProcessedBuffer = false
         print("🎤 DictationEngine: Recognition cleaned up")
