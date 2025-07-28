@@ -62,7 +62,7 @@ class MenuBarController: NSObject {
     
     /// Update menu items to reflect current state
     func refreshMenu() {
-        guard let menu = statusBarItem.menu else { return }
+        guard statusBarItem.menu != nil else { return }
         
         updateTargetAppMenu()
         updateVocabularyMenu()

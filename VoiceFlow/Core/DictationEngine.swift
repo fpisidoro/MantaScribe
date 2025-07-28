@@ -279,7 +279,15 @@ class DictationEngine: NSObject {
     
     private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
         let text = result.bestTranscription.formattedString
-        let confidence = result.bestTranscription.averageConfidence
+        
+        // Calculate average confidence from segments
+        let confidence: Float
+        if !result.bestTranscription.segments.isEmpty {
+            let totalConfidence = result.bestTranscription.segments.reduce(0.0) { $0 + $1.confidence }
+            confidence = totalConfidence / Float(result.bestTranscription.segments.count)
+        } else {
+            confidence = 0.5 // Default moderate confidence
+        }
         
         // Always update legacy buffer for push-to-talk compatibility
         currentBuffer = text
