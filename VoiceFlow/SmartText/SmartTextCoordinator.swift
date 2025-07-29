@@ -1,8 +1,8 @@
 /*
- * MantaScribe - SmartTextCoordinator.swift - Smart Features Re-enabled for Completion Detection
+ * MantaScribe - SmartTextCoordinator.swift - Real Smart Features Integration
  *
  * SMART COMPLETION INTEGRATION:
- * - Re-enabled smart capitalization and spacing for Apple's corrected text
+ * - Integrated real CursorDetector, CapitalizationEngine, and SpacingEngine
  * - Medical vocabulary remains enabled via contextualStrings
  * - Performance testing framework maintained for future optimization
  *
@@ -15,10 +15,10 @@
 import Foundation
 import Cocoa
 
-// MARK: - SmartText Coordinator (Re-enabled for Smart Completion)
+// MARK: - SmartText Coordinator (Real Engines Integration)
 
 /// Coordinates all SmartText components with Apple's completion-detected text
-/// Now processes final corrected transcription for maximum accuracy + intelligence
+/// Now uses real CursorDetector, CapitalizationEngine, and SpacingEngine for production-grade intelligence
 class SmartTextCoordinator {
     
     // MARK: - Smart Features Configuration
@@ -40,22 +40,19 @@ class SmartTextCoordinator {
     /// Expected impact: High (app switching + text selection + cursor manipulation)
     var enableSmartCapitalization = true  // ✅ RE-ENABLED
     
-    // MARK: - Dependencies
+    // MARK: - Real Smart Feature Engines
     
-    private var spacingEngine: SmartSpacingEngine?
-    private var capitalizationEngine: SmartCapitalizationEngine?
+    private let cursorDetector: CursorDetector
+    private let spacingEngine: SpacingEngine
+    private let capitalizationEngine: CapitalizationEngine
     
     // MARK: - Initialization
     
     init() {
-        // Initialize smart feature engines for completion-detected text
-        if enableSmartSpacing {
-            spacingEngine = SmartSpacingEngine()
-        }
-        
-        if enableSmartCapitalization {
-            capitalizationEngine = SmartCapitalizationEngine()
-        }
+        // Initialize real smart feature engines for completion-detected text
+        self.cursorDetector = CursorDetector()
+        self.spacingEngine = SpacingEngine()
+        self.capitalizationEngine = CapitalizationEngine()
         
         printCurrentConfiguration()
     }
@@ -89,36 +86,78 @@ class SmartTextCoordinator {
             }
         }
         
-        // Step 2: Smart spacing (cursor detection + spacing logic)
-        var spacingDecision: (needsLeadingSpace: Bool, needsTrailingSpace: Bool) = (true, false)
-        if enableSmartSpacing {
+        // Step 2: Real cursor detection (for both spacing and capitalization)
+        var cursorDetectionResult: CursorDetector.DetectionResult?
+        var detectionTime: Double = 0
+        
+        if enableSmartSpacing || enableSmartCapitalization {
+            let detectionStartTime = CFAbsoluteTimeGetCurrent()
+            
+            // Switch to target app briefly for cursor detection
+            let originalApp = NSWorkspace.shared.frontmostApplication
+            _ = appTargetManager.activateTargetApp(targetApp) { _ in
+                // Cursor detection happens during app switch
+            }
+            
+            // Perform real cursor detection
+            cursorDetectionResult = cursorDetector.detectCursorContext()
+            detectionTime = (CFAbsoluteTimeGetCurrent() - detectionStartTime) * 1000
+            appliedFeatures.append("Cursor Detection (\(String(format: "%.1f", detectionTime))ms)")
+            
+            // Restore original app (will happen anyway during text sending, but good practice)
+            if let original = originalApp {
+                original.activate(options: [])
+            }
+        }
+        
+        // Step 3: Smart spacing using real SpacingEngine
+        var spacingDecision = SpacingEngine.SpacingDecision(needsLeadingSpace: true, needsTrailingSpace: false, reason: "Default spacing")
+        
+        if enableSmartSpacing, let detectionResult = cursorDetectionResult {
             let spacingStartTime = CFAbsoluteTimeGetCurrent()
-            spacingDecision = analyzeSpacingContext(text: processedText, targetApp: targetApp, appTargetManager: appTargetManager)
+            
+            // Use real SpacingEngine with detected cursor context
+            let isPunctuation = spacingEngine.isPunctuation(processedText)
+            spacingDecision = spacingEngine.determineSpacing(
+                for: processedText,
+                detectedChars: detectionResult.detectedChars,
+                isPunctuation: isPunctuation
+            )
+            
             let spacingTime = (CFAbsoluteTimeGetCurrent() - spacingStartTime) * 1000
             appliedFeatures.append("Smart Spacing (\(String(format: "%.1f", spacingTime))ms)")
+            
+            print("🧠 📝 Smart spacing decision: leading=\(spacingDecision.needsLeadingSpace), trailing=\(spacingDecision.needsTrailingSpace) (\(spacingDecision.reason))")
         }
         
-        // Step 3: Smart capitalization (cursor detection + capitalization logic)
-        var shouldCapitalize = false
-        if enableSmartCapitalization {
+        // Step 4: Smart capitalization using real CapitalizationEngine
+        var capitalizationResult: CapitalizationEngine.CapitalizationResult?
+        
+        if enableSmartCapitalization, let detectionResult = cursorDetectionResult {
             let capsStartTime = CFAbsoluteTimeGetCurrent()
-            shouldCapitalize = analyzeCapitalizationContext(text: processedText, targetApp: targetApp, appTargetManager: appTargetManager)
+            
+            // Determine if we should capitalize based on cursor context
+            let shouldCapitalize = detectionResult.context.shouldCapitalize
+            
+            // Apply real CapitalizationEngine
+            capitalizationResult = capitalizationEngine.applyCapitalization(
+                to: processedText,
+                shouldCapitalizeStart: shouldCapitalize
+            )
+            
+            if let result = capitalizationResult, result.wasModified {
+                processedText = result.text
+                print("🧠 ✅ Smart capitalization applied: '\(text)' → '\(processedText)' (\(result.reason))")
+            }
+            
             let capsTime = (CFAbsoluteTimeGetCurrent() - capsStartTime) * 1000
             appliedFeatures.append("Smart Capitalization (\(String(format: "%.1f", capsTime))ms)")
-        }
-        
-        // Apply capitalization if needed
-        if shouldCapitalize && !processedText.isEmpty {
-            let firstChar = processedText.prefix(1).uppercased()
-            let restOfText = processedText.dropFirst()
-            processedText = firstChar + restOfText
-            print("🧠 ✅ Applied smart capitalization: '\(text)' → '\(processedText)'")
         }
         
         // Send processed text with smart formatting
         appTargetManager.sendText(
             processedText,
-            shouldCapitalize: false, // Already handled above
+            shouldCapitalize: false, // Already handled by CapitalizationEngine
             needsLeadingSpace: spacingDecision.needsLeadingSpace,
             needsTrailingSpace: spacingDecision.needsTrailingSpace,
             completion: completion
@@ -128,135 +167,18 @@ class SmartTextCoordinator {
         let totalTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         let featuresApplied = appliedFeatures.isEmpty ? "None" : appliedFeatures.joined(separator: ", ")
         print("🧠 ⏱️ SmartText completed in \(String(format: "%.1f", totalTime))ms | Features: \(featuresApplied)")
-    }
-    
-    // MARK: - Smart Feature Analysis (Re-implement Core Logic)
-    
-    /// Analyze cursor context to determine optimal spacing
-    private func analyzeSpacingContext(
-        text: String,
-        targetApp: AppTargetManager.TargetApp,
-        appTargetManager: AppTargetManager
-    ) -> (needsLeadingSpace: Bool, needsTrailingSpace: Bool) {
         
-        // Get cursor context from target app
-        let cursorContext = getCursorContext(targetApp: targetApp, appTargetManager: appTargetManager)
-        
-        // Analyze spacing based on text content and cursor context
-        let textToAnalyze = text.trimmingCharacters(in: .whitespaces)
-        
-        // Check if this is punctuation
-        let isPunctuation = [".", ",", "?", "!", ":", ";"].contains(textToAnalyze)
-        
-        if isPunctuation {
-            // Punctuation: no leading space, add trailing space
-            print("🧠 📝 Spacing: Punctuation detected - no leading space, add trailing space")
-            return (needsLeadingSpace: false, needsTrailingSpace: true)
+        // Log detailed results for debugging
+        if enableSmartCapitalization || enableSmartSpacing {
+            logDetailedResults(
+                originalText: text,
+                finalText: processedText,
+                cursorContext: cursorDetectionResult?.context,
+                detectedChars: cursorDetectionResult?.detectedChars,
+                spacingDecision: spacingDecision,
+                capitalizationResult: capitalizationResult
+            )
         }
-        
-        // Check cursor context for existing spacing
-        let beforeCursor = cursorContext.beforeCursor
-        let afterCursor = cursorContext.afterCursor
-        
-        // Determine leading space
-        let needsLeadingSpace: Bool
-        if beforeCursor.isEmpty {
-            // Start of document - no leading space
-            needsLeadingSpace = false
-            print("🧠 📝 Spacing: Start of document - no leading space")
-        } else if beforeCursor.hasSuffix(" ") || beforeCursor.hasSuffix("\n") {
-            // Already has whitespace - no additional space
-            needsLeadingSpace = false
-            print("🧠 📝 Spacing: Existing whitespace detected - no leading space")
-        } else {
-            // Normal text continuation - add leading space
-            needsLeadingSpace = true
-            print("🧠 📝 Spacing: Normal continuation - add leading space")
-        }
-        
-        // Determine trailing space (generally no trailing space unless special case)
-        let needsTrailingSpace = false
-        
-        return (needsLeadingSpace: needsLeadingSpace, needsTrailingSpace: needsTrailingSpace)
-    }
-    
-    /// Analyze cursor context to determine if capitalization is needed
-    private func analyzeCapitalizationContext(
-        text: String,
-        targetApp: AppTargetManager.TargetApp,
-        appTargetManager: AppTargetManager
-    ) -> Bool {
-        
-        // Get cursor context from target app
-        let cursorContext = getCursorContext(targetApp: targetApp, appTargetManager: appTargetManager)
-        
-        let textToAnalyze = text.trimmingCharacters(in: .whitespaces)
-        if textToAnalyze.isEmpty { return false }
-        
-        let beforeCursor = cursorContext.beforeCursor
-        
-        // Check capitalization context
-        if beforeCursor.isEmpty {
-            // Start of document - capitalize
-            print("🧠 🔤 Capitalization: Start of document - capitalize")
-            return true
-        }
-        
-        // Check for sentence endings
-        let sentenceEnders = [".", "!", "?", ":", ";"]
-        for ender in sentenceEnders {
-            if beforeCursor.hasSuffix(ender) || beforeCursor.hasSuffix(ender + " ") {
-                print("🧠 🔤 Capitalization: After sentence ending '\(ender)' - capitalize")
-                return true
-            }
-        }
-        
-        // Check for paragraph breaks
-        if beforeCursor.hasSuffix("\n\n") || beforeCursor.hasSuffix("\n") {
-            print("🧠 🔤 Capitalization: After line break - capitalize")
-            return true
-        }
-        
-        // Check for double spaces (often indicates sentence boundary)
-        if beforeCursor.hasSuffix("  ") {
-            print("🧠 🔤 Capitalization: After double space - capitalize")
-            return true
-        }
-        
-        // Otherwise, continue with lowercase (mid-sentence)
-        print("🧠 🔤 Capitalization: Mid-sentence context - no capitalization")
-        return false
-    }
-    
-    // MARK: - Cursor Context Detection
-    
-    private struct CursorContext {
-        let beforeCursor: String
-        let afterCursor: String
-        let isValid: Bool
-    }
-    
-    /// Get text context around cursor position for smart analysis
-    private func getCursorContext(
-        targetApp: AppTargetManager.TargetApp,
-        appTargetManager: AppTargetManager
-    ) -> CursorContext {
-        
-        // This is a simplified implementation
-        // In a full implementation, you would:
-        // 1. Switch to target app briefly
-        // 2. Use accessibility APIs or key combinations to select text around cursor
-        // 3. Analyze the selected text
-        // 4. Return to original app
-        
-        // For now, return a basic context that assumes normal text continuation
-        // This can be enhanced later with actual cursor detection
-        
-        return CursorContext(
-            beforeCursor: " ", // Assume normal text continuation
-            afterCursor: "",
-            isValid: true
-        )
     }
     
     // MARK: - Configuration Management
@@ -265,14 +187,15 @@ class SmartTextCoordinator {
     private func printCurrentConfiguration() {
         print("""
         
-        🧠 SmartTextCoordinator - Smart Features RE-ENABLED for Completion Detection
+        🧠 SmartTextCoordinator - Real Smart Engines Integration
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         📚 Legacy Vocabulary: \(enableLegacyVocabulary ? "✅ ENABLED" : "❌ DISABLED")
         🎯 Contextual Strings: \(enableContextualStrings ? "✅ ENABLED" : "❌ DISABLED")  
-        📝 Smart Spacing: \(enableSmartSpacing ? "✅ ENABLED" : "❌ DISABLED")
-        🔤 Smart Capitalization: \(enableSmartCapitalization ? "✅ ENABLED" : "❌ DISABLED")
+        📝 Smart Spacing: \(enableSmartSpacing ? "✅ ENABLED (Real SpacingEngine)" : "❌ DISABLED")
+        🔤 Smart Capitalization: \(enableSmartCapitalization ? "✅ ENABLED (Real CapitalizationEngine)" : "❌ DISABLED")
+        🔍 Cursor Detection: \(enableSmartSpacing || enableSmartCapitalization ? "✅ ENABLED (Real CursorDetector)" : "❌ DISABLED")
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        🧠 Now processing Apple's completion-detected corrected text!
+        🧠 Now using REAL smart engines for production-grade intelligence!
         
         """)
     }
@@ -280,32 +203,53 @@ class SmartTextCoordinator {
     /// Update configuration and reinitialize engines as needed
     func updateConfiguration() {
         printCurrentConfiguration()
+        // Real engines are always initialized, just controlled by feature flags
+        print("🧠 Real engines ready - controlled by feature flags")
+    }
+    
+    // MARK: - Detailed Logging for Debugging
+    
+    private func logDetailedResults(
+        originalText: String,
+        finalText: String,
+        cursorContext: CursorDetector.CursorContext?,
+        detectedChars: String?,
+        spacingDecision: SpacingEngine.SpacingDecision,
+        capitalizationResult: CapitalizationEngine.CapitalizationResult?
+    ) {
+        print("""
         
-        // Reinitialize engines based on new configuration
-        if enableSmartSpacing && spacingEngine == nil {
-            spacingEngine = SmartSpacingEngine()
-            print("🧠 Initialized SmartSpacingEngine")
-        }
+        🧠 SmartText Detailed Results:
+        ┌─ Input: '\(originalText)'
+        ├─ Output: '\(finalText)'
+        ├─ Cursor Context: \(cursorContext?.description ?? "Unknown")
+        ├─ Detected Chars: '\(detectedChars?.debugDescription ?? "None")'
+        ├─ Spacing: \(spacingDecision.reason)
+        └─ Capitalization: \(capitalizationResult?.reason ?? "Not applied")
         
-        if enableSmartCapitalization && capitalizationEngine == nil {
-            capitalizationEngine = SmartCapitalizationEngine()
-            print("🧠 Initialized SmartCapitalizationEngine")
-        }
+        """)
     }
 }
 
-// MARK: - Smart Feature Engine Implementations
+// MARK: - CursorContext Extension for Better Logging
 
-/// Smart spacing engine with cursor context analysis
-class SmartSpacingEngine {
-    init() {
-        print("📝 SmartSpacingEngine initialized for completion-detected text")
-    }
-}
-
-/// Smart capitalization engine with cursor context analysis  
-class SmartCapitalizationEngine {
-    init() {
-        print("🔤 SmartCapitalizationEngine initialized for completion-detected text")
+extension CursorDetector.CursorContext: CustomStringConvertible {
+    var description: String {
+        switch self {
+        case .startOfDocument:
+            return "Start of Document"
+        case .afterSentencePunctuation:
+            return "After Sentence Punctuation"
+        case .afterClausePunctuation:
+            return "After Clause Punctuation"
+        case .afterWhitespace:
+            return "After Whitespace"
+        case .afterDoubleNewline:
+            return "After Double Newline"
+        case .afterNormalText:
+            return "After Normal Text"
+        case .unknown:
+            return "Unknown"
+        }
     }
 }
