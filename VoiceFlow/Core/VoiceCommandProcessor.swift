@@ -186,7 +186,11 @@ class VoiceCommandProcessor {
         
         if let app = NSRunningApplication.runningApplications(withBundleIdentifier: targetApp.bundleId).first {
             // Activate target app
-            app.activate(options: [.activateIgnoringOtherApps])
+            if #available(macOS 14.0, *) {
+                app.activate()
+            } else {
+                app.activate(options: [.activateIgnoringOtherApps])
+            }
             
             // Small delay to ensure app becomes active
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -201,7 +205,11 @@ class VoiceCommandProcessor {
                 // Switch back to original app
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     if let originalApp = originalApp {
-                        originalApp.activate(options: [.activateIgnoringOtherApps])
+                        if #available(macOS 14.0, *) {
+                            originalApp.activate()
+                        } else {
+                            originalApp.activate(options: [.activateIgnoringOtherApps])
+                        }
                     }
                 }
             }

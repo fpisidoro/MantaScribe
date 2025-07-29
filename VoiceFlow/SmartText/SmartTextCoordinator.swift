@@ -95,8 +95,14 @@ class SmartTextCoordinator {
             
             // Switch to target app briefly for cursor detection
             let originalApp = NSWorkspace.shared.frontmostApplication
-            _ = appTargetManager.activateTargetApp(targetApp) { _ in
-                // Cursor detection happens during app switch
+            
+            // Activate target app for cursor detection
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: targetApp.bundleId).first {
+                if #available(macOS 14.0, *) {
+                    app.activate()
+                } else {
+                    app.activate(options: [.activateIgnoringOtherApps])
+                }
             }
             
             // Perform real cursor detection

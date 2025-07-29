@@ -125,7 +125,11 @@ class AppTargetManager {
         let optimalDelay = getOptimalDelay(for: app)
         
         // Activate the target app
-        app.activate(options: [.activateIgnoringOtherApps])
+        if #available(macOS 14.0, *) {
+            app.activate()
+        } else {
+            app.activate(options: [.activateIgnoringOtherApps])
+        }
         print("✅ App activation called with \(optimalDelay)s delay")
         
         // Wait optimal time for app to become active, then paste
@@ -185,7 +189,11 @@ class AppTargetManager {
         
         if let originalApp = originalApp {
             print("🔄 Switching back to: \(originalApp.localizedName ?? "Unknown")")
-            originalApp.activate(options: [.activateIgnoringOtherApps])
+            if #available(macOS 14.0, *) {
+                originalApp.activate()
+            } else {
+                originalApp.activate(options: [.activateIgnoringOtherApps])
+            }
             
             // Update status after switching back
             DispatchQueue.main.asyncAfter(deadline: .now() + statusUpdateDelay) {
