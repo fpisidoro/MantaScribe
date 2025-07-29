@@ -2,15 +2,14 @@ import Foundation
 import Speech
 import AVFoundation
 
-/// Robust dictation engine with proactive warm-up and reliable cold start handling
+/// Safe dictation engine with smart cold start handling (no proactive warm-up)
 class DictationEngine: NSObject {
     
     // MARK: - Types
     
     enum DictationState {
         case idle
-        case warming       // Proactive warm-up in progress
-        case ready         // Warmed up and ready for dictation
+        case ready         // Available for dictation
         case listening
         case processing
         case error
@@ -31,7 +30,6 @@ class DictationEngine: NSObject {
         case audioEngineFailure(Error)
         case recognitionRequestCreationFailed
         case recognitionTaskFailed(Error)
-        case warmUpFailed(Error)
     }
     
     // MARK: - Delegate Protocol
@@ -59,17 +57,15 @@ class DictationEngine: NSObject {
     private var isWaitingForFinalResult = false   // Push-to-talk completion tracking
     private var pushToTalkBackgroundQueue: DispatchQueue? // Background processing for push-to-talk
     
-    // ROBUST COLD START MANAGEMENT
-    private var systemState: DictationState = .idle
-    private var isSystemReady = false             // True when speech system is warmed up and ready
-    private var warmUpTask: SFSpeechRecognitionTask? // Background warm-up task
-    private var pendingStart = false              // User tried to start before system ready
-    private var userRequestedStop = false         // User explicitly requested stop (prevents auto-retry)
+    // SAFE COLD START MANAGEMENT
+    private var hasEverStartedSuccessfully = false // Track if we've ever had a successful start
+    private var userRequestedStop = false          // User explicitly requested stop
+    private var coldStartAttempts = 0              // Count of cold start attempts
+    private let maxColdStartAttempts = 2           // Maximum retry attempts
     
     // State
     private(set) var state: DictationState = .idle {
         didSet {
-            systemState = state
             print("🎤 DictationEngine: State → \(state)")
         }
     }
@@ -78,89 +74,14 @@ class DictationEngine: NSObject {
     // Configuration
     private let enableOnDeviceRecognition = true
     private let bufferSize: AVAudioFrameCount = 1024
-    private let warmUpTimeout: TimeInterval = 10.0  // Max time to wait for warm-up
     
-    // MARK: - Initialization & Proactive Warm-Up
+    // MARK: - Initialization
     
     override init() {
         super.init()
         setupSpeechRecognizer()
-        startProactiveWarmUp()
-    }
-    
-    /// Start background warm-up immediately when app launches
-    private func startProactiveWarmUp() {
-        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("❌ Speech recognizer not available for warm-up")
-            setState(.error)
-            return
-        }
-        
-        print("🌡️ Starting proactive speech system warm-up...")
-        setState(.warming)
-        
-        // Create a minimal recognition request for warm-up only
-        let warmUpRequest = SFSpeechAudioBufferRecognitionRequest()
-        warmUpRequest.shouldReportPartialResults = true
-        
-        // Enable on-device recognition if available
-        if #available(macOS 13.0, *), enableOnDeviceRecognition {
-            warmUpRequest.requiresOnDeviceRecognition = true
-        }
-        
-        // Start warm-up recognition task
-        warmUpTask = speechRecognizer.recognitionTask(with: warmUpRequest) { [weak self] result, error in
-            guard let self = self else { return }
-            
-            if let result = result {
-                // Any result means the system is warmed up
-                if !self.isSystemReady {
-                    print("🌡️ ✅ Speech system warmed up successfully!")
-                    DispatchQueue.main.async {
-                        self.completeWarmUp()
-                    }
-                }
-            }
-            
-            if let error = error {
-                print("🌡️ ⚠️ Warm-up encountered error (this is normal): \(error.localizedDescription)")
-                // Even errors during warm-up mean the system tried to work, so mark as ready
-                if !self.isSystemReady {
-                    DispatchQueue.main.async {
-                        self.completeWarmUp()
-                    }
-                }
-            }
-        }
-        
-        // Set timeout for warm-up completion
-        DispatchQueue.main.asyncAfter(deadline: .now() + warmUpTimeout) {
-            if !self.isSystemReady {
-                print("🌡️ ⏰ Warm-up timeout - assuming system is ready")
-                self.completeWarmUp()
-            }
-        }
-        
-        // Immediately end the warm-up request (we just wanted to initialize the system)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            warmUpRequest.endAudio()
-        }
-    }
-    
-    private func completeWarmUp() {
-        isSystemReady = true
-        warmUpTask?.cancel()
-        warmUpTask = nil
-        setState(.ready)
-        
-        print("🌡️ ✅ Speech system ready for dictation!")
-        
-        // If user tried to start dictation before warm-up completed, start now
-        if pendingStart {
-            pendingStart = false
-            print("🎤 Starting pending dictation request...")
-            performStartDictation()
-        }
+        setState(.ready) // Available for use immediately
+        print("🎤 DictationEngine: Initialized and ready (no proactive warm-up)")
     }
     
     // MARK: - Mode Management
@@ -181,56 +102,84 @@ class DictationEngine: NSObject {
     
     // MARK: - Public Interface
     
-    /// Start dictation with robust cold start handling
+    /// Start dictation with safe cold start handling
     func startDictation() {
         // Clear any previous stop request
         userRequestedStop = false
         
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            print("❌ Speech recognizer not available")
             let error = DictationError.speechRecognizerUnavailable
             delegate?.dictationEngine(self, didEncounterError: error)
             return
         }
         
-        // Check if system is ready
-        if !isSystemReady {
-            print("🌡️ System not ready - queuing start request until warm-up completes")
-            pendingStart = true
-            return
-        }
-        
-        // System is ready - start immediately
-        performStartDictation()
-    }
-    
-    private func performStartDictation() {
         guard !isRecording else {
             print("🎤 Already recording - ignoring start request")
             return
         }
         
-        print("🎙️ DictationEngine: Starting \(dictationMode) dictation with \(processingMode) processing")
-        
+        print("🎙️ DictationEngine: Starting \(dictationMode) dictation")
+        performStartDictation()
+    }
+    
+    private func performStartDictation() {
         setState(.listening)
         resetSession()
-        setupRecognitionRequest()
-        setupAudioEngine()
-        startAudioEngine()
-        startRecognitionTask()
         
-        isRecording = true
-        delegate?.dictationEngineDidStart(self)
+        do {
+            try setupRecognitionRequest()
+            try setupAudioEngine()
+            try startAudioEngine()
+            startRecognitionTask()
+            
+            isRecording = true
+            coldStartAttempts = 0 // Reset on successful start
+            hasEverStartedSuccessfully = true
+            delegate?.dictationEngineDidStart(self)
+            print("✅ Dictation started successfully")
+            
+        } catch {
+            print("❌ Failed to start dictation: \(error)")
+            handleStartFailure(error)
+        }
+    }
+    
+    private func handleStartFailure(_ error: Error) {
+        cleanupRecognition()
+        setState(.error)
+        
+        // For cold start issues, try again with a brief delay (but only a few times)
+        if !hasEverStartedSuccessfully && coldStartAttempts < maxColdStartAttempts {
+            coldStartAttempts += 1
+            print("🌡️ Cold start attempt \(coldStartAttempts)/\(maxColdStartAttempts) failed - retrying in 1s...")
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                if !self.userRequestedStop && !self.isRecording {
+                    print("🔄 Cold start retry \(self.coldStartAttempts)")
+                    self.setState(.ready)
+                    self.performStartDictation()
+                }
+            }
+        } else {
+            // Give up and report error
+            let dictationError: DictationError
+            if let audioError = error as? DictationError {
+                dictationError = audioError
+            } else {
+                dictationError = DictationError.recognitionTaskFailed(error)
+            }
+            delegate?.dictationEngine(self, didEncounterError: dictationError)
+        }
     }
     
     /// Stop dictation with reliable stop behavior
     func stopDictation() {
         print("⏹️ DictationEngine: User requested stop")
         
-        // Mark that user explicitly requested stop (prevents auto-retry interference)
+        // Mark that user explicitly requested stop
         userRequestedStop = true
-        
-        // Cancel any pending start requests
-        pendingStart = false
+        coldStartAttempts = 0 // Reset retry counter
         
         guard isRecording else {
             print("🎤 Not recording - ignoring stop request")
@@ -265,7 +214,7 @@ class DictationEngine: NSObject {
     }
     
     var isReady: Bool {
-        return isSystemReady && state == .ready
+        return state == .ready || state == .idle
     }
     
     // MARK: - Private Methods - Setup
@@ -284,15 +233,17 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Session reset")
     }
     
-    private func setupRecognitionRequest() {
+    private func setupRecognitionRequest() throws {
         recognitionTask?.cancel()
         recognitionTask = nil
         
+        guard let speechRecognizer = speechRecognizer else {
+            throw DictationError.speechRecognizerUnavailable
+        }
+        
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
-            let error = DictationError.recognitionRequestCreationFailed
-            delegate?.dictationEngine(self, didEncounterError: error)
-            return
+            throw DictationError.recognitionRequestCreationFailed
         }
         
         recognitionRequest.shouldReportPartialResults = true
@@ -327,7 +278,7 @@ class DictationEngine: NSObject {
         }
     }
     
-    private func setupAudioEngine() {
+    private func setupAudioEngine() throws {
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
@@ -345,29 +296,27 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Audio engine configured")
     }
     
-    private func startAudioEngine() {
+    private func startAudioEngine() throws {
         do {
             try audioEngine.start()
             print("🎤 DictationEngine: Audio engine started")
         } catch {
             print("❌ DictationEngine: Audio engine failed: \(error)")
-            setState(.error)
-            let dictationError = DictationError.audioEngineFailure(error)
-            delegate?.dictationEngine(self, didEncounterError: dictationError)
+            throw DictationError.audioEngineFailure(error)
         }
     }
     
     private func startRecognitionTask() {
         guard let speechRecognizer = speechRecognizer,
               let recognitionRequest = recognitionRequest else {
+            print("❌ Cannot start recognition task - missing components")
             return
         }
         
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self = self else { return }
             
-            // IMPORTANT: Check if user requested stop before processing results
-            // This prevents the toggle loop issue
+            // Check if user requested stop before processing results
             if self.userRequestedStop {
                 print("🎤 Ignoring recognition result - user requested stop")
                 return
@@ -380,7 +329,7 @@ class DictationEngine: NSObject {
             if let error = error {
                 print("❌ DictationEngine: Recognition error: \(error.localizedDescription)")
                 
-                // Only report error if user didn't request stop (expected errors during stop)
+                // Only report error if user didn't request stop
                 if !self.userRequestedStop {
                     DispatchQueue.main.async {
                         let dictationError = DictationError.recognitionTaskFailed(error)
