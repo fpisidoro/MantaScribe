@@ -2,27 +2,27 @@ import Foundation
 import Speech
 import AVFoundation
 
-/// Safe dictation engine with smart cold start handling (no proactive warm-up)
+/// Bulletproof dictation engine focused on absolute reliability
 class DictationEngine: NSObject {
     
     // MARK: - Types
     
     enum DictationState {
         case idle
-        case ready         // Available for dictation
+        case ready
         case listening
         case processing
         case error
     }
     
     enum DictationMode {
-        case toggle        // Continuous listening with metadata-based finalization
-        case pushToTalk    // Stop and wait for natural final result
+        case toggle        // Continuous listening until manually stopped
+        case pushToTalk    // Record while key held, stop when released
     }
     
     enum ProcessingMode {
-        case fast          // Minimal processing for speed
-        case smart         // Full smart features on final results
+        case fast
+        case smart
     }
     
     enum DictationError: Error {
@@ -32,11 +32,9 @@ class DictationEngine: NSObject {
         case recognitionTaskFailed(Error)
     }
     
-    // MARK: - Delegate Protocol
+    // MARK: - Properties
     
     weak var delegate: DictationEngineDelegate?
-    
-    // MARK: - Properties
     
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -48,45 +46,50 @@ class DictationEngine: NSObject {
     private var dictationMode: DictationMode = .toggle
     private var processingMode: ProcessingMode = .smart
     
-    // METADATA-BASED PROCESSING
-    private var currentPartialText = ""           // For UI feedback only
-    private var lastProcessedText = ""            // Track processed final results
-    private var isCurrentlyProcessing = false     // Prevent concurrent processing
+    // ROCK-SOLID STATE MANAGEMENT
+    private var isActivelyRecording = false        // True only when actually recording audio
+    private var userRequestedStop = false          // User explicitly wants to stop
+    private var isProcessingResults = false        // Currently processing speech results
+    
+    // Speech Processing
+    private var currentText = ""                   // Current accumulated text
+    private var lastProcessedText = ""             // Last text we sent to delegate
+    private var hasReceivedAnyResults = false      // Track if we've gotten any speech results
     
     // Push-to-Talk Support
-    private var isWaitingForFinalResult = false   // Push-to-talk completion tracking
-    private var pushToTalkBackgroundQueue: DispatchQueue? // Background processing for push-to-talk
-    
-    // SAFE COLD START MANAGEMENT
-    private var hasEverStartedSuccessfully = false // Track if we've ever had a successful start
-    private var userRequestedStop = false          // User explicitly requested stop
-    private var coldStartAttempts = 0              // Count of cold start attempts
-    private let maxColdStartAttempts = 2           // Maximum retry attempts
+    private var isWaitingForPushToTalkResults = false
+    private var pushToTalkTimeoutTimer: Timer?
     
     // State
     private(set) var state: DictationState = .idle {
         didSet {
-            print("🎤 DictationEngine: State → \(state)")
+            if oldValue != state {
+                print("🎤 DictationEngine: State → \(state)")
+            }
         }
     }
-    private(set) var isRecording = false
     
     // Configuration
-    private let enableOnDeviceRecognition = true
     private let bufferSize: AVAudioFrameCount = 1024
+    private let pushToTalkTimeout: TimeInterval = 3.0  // Max wait for results after key release
     
     // MARK: - Initialization
     
     override init() {
         super.init()
         setupSpeechRecognizer()
-        setState(.ready) // Available for use immediately
-        print("🎤 DictationEngine: Initialized and ready (no proactive warm-up)")
+        setState(.ready)
+        print("🎤 DictationEngine: Initialized - bulletproof reliability mode")
     }
     
-    // MARK: - Mode Management
+    // MARK: - Public Interface
     
     func setDictationMode(_ mode: DictationMode) {
+        // Only change mode when not actively recording
+        guard !isActivelyRecording else {
+            print("🎤 Cannot change mode while recording")
+            return
+        }
         dictationMode = mode
         print("🎤 DictationEngine: Mode set to \(mode)")
     }
@@ -100,113 +103,70 @@ class DictationEngine: NSObject {
         self.smartTextCoordinator = coordinator
     }
     
-    // MARK: - Public Interface
-    
-    /// Start dictation with safe cold start handling
+    /// Start dictation - BULLETPROOF VERSION
     func startDictation() {
-        // Clear any previous stop request
+        print("🎤 ═══ START DICTATION REQUEST ═══")
+        print("🎤 Current state: \(state), isActivelyRecording: \(isActivelyRecording)")
+        
+        // Clear stop flag - user wants to start
         userRequestedStop = false
         
+        // Validate prerequisites
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
             print("❌ Speech recognizer not available")
-            let error = DictationError.speechRecognizerUnavailable
-            delegate?.dictationEngine(self, didEncounterError: error)
+            handleError(DictationError.speechRecognizerUnavailable)
             return
         }
         
-        guard !isRecording else {
-            print("🎤 Already recording - ignoring start request")
+        guard !isActivelyRecording else {
+            print("🎤 Already recording - ignoring duplicate start request")
             return
         }
         
-        print("🎙️ DictationEngine: Starting \(dictationMode) dictation")
-        performStartDictation()
-    }
-    
-    private func performStartDictation() {
-        setState(.listening)
+        // Reset state for fresh start
         resetSession()
         
+        // Start the recognition process
         do {
-            try setupRecognitionRequest()
-            try setupAudioEngine()
-            try startAudioEngine()
-            startRecognitionTask()
-            
-            isRecording = true
-            coldStartAttempts = 0 // Reset on successful start
-            hasEverStartedSuccessfully = true
-            delegate?.dictationEngineDidStart(self)
-            print("✅ Dictation started successfully")
-            
+            try performStart()
+            print("🎤 ✅ Dictation started successfully in \(dictationMode) mode")
         } catch {
             print("❌ Failed to start dictation: \(error)")
             handleStartFailure(error)
         }
     }
     
-    private func handleStartFailure(_ error: Error) {
-        cleanupRecognition()
-        setState(.error)
-        
-        // For cold start issues, try again with a brief delay (but only a few times)
-        if !hasEverStartedSuccessfully && coldStartAttempts < maxColdStartAttempts {
-            coldStartAttempts += 1
-            print("🌡️ Cold start attempt \(coldStartAttempts)/\(maxColdStartAttempts) failed - retrying in 1s...")
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                if !self.userRequestedStop && !self.isRecording {
-                    print("🔄 Cold start retry \(self.coldStartAttempts)")
-                    self.setState(.ready)
-                    self.performStartDictation()
-                }
-            }
-        } else {
-            // Give up and report error
-            let dictationError: DictationError
-            if let audioError = error as? DictationError {
-                dictationError = audioError
-            } else {
-                dictationError = DictationError.recognitionTaskFailed(error)
-            }
-            delegate?.dictationEngine(self, didEncounterError: dictationError)
-        }
-    }
-    
-    /// Stop dictation with reliable stop behavior
+    /// Stop dictation - BULLETPROOF VERSION  
     func stopDictation() {
-        print("⏹️ DictationEngine: User requested stop")
+        print("🎤 ═══ STOP DICTATION REQUEST ═══")
+        print("🎤 Current state: \(state), isActivelyRecording: \(isActivelyRecording)")
+        print("🎤 Mode: \(dictationMode), hasResults: \(hasReceivedAnyResults)")
         
-        // Mark that user explicitly requested stop
+        // Mark that user wants to stop (prevents any auto-restarts)
         userRequestedStop = true
-        coldStartAttempts = 0 // Reset retry counter
         
-        guard isRecording else {
+        // Cancel any pending timers
+        pushToTalkTimeoutTimer?.invalidate()
+        pushToTalkTimeoutTimer = nil
+        
+        guard isActivelyRecording else {
             print("🎤 Not recording - ignoring stop request")
             return
         }
         
-        print("⏹️ DictationEngine: Stopping \(dictationMode) dictation")
-        
-        // Mode-specific stop behavior
+        // Handle mode-specific stop logic
         switch dictationMode {
         case .toggle:
             handleToggleStop()
-            cleanupRecognition()
-            setState(.ready)
-            isRecording = false
-            delegate?.dictationEngineDidStop(self)
-            
         case .pushToTalk:
             handlePushToTalkStop()
-            // Note: cleanup will be called from finalizePushToTalkStop()
         }
     }
     
     // MARK: - State Queries
     
     var isDictating: Bool {
-        return isRecording
+        return isActivelyRecording
     }
     
     var currentState: DictationState {
@@ -214,33 +174,54 @@ class DictationEngine: NSObject {
     }
     
     var isReady: Bool {
-        return state == .ready || state == .idle
+        return state == .ready && !isActivelyRecording
     }
     
-    // MARK: - Private Methods - Setup
+    // MARK: - Private Implementation
     
     private func setupSpeechRecognizer() {
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         speechRecognizer?.delegate = self
-        print("🎤 DictationEngine: Speech recognizer initialized")
+        print("🎤 Speech recognizer initialized")
     }
     
     private func resetSession() {
-        currentPartialText = ""
+        currentText = ""
         lastProcessedText = ""
-        isCurrentlyProcessing = false
-        isWaitingForFinalResult = false
-        print("🎤 DictationEngine: Session reset")
+        hasReceivedAnyResults = false
+        isProcessingResults = false
+        isWaitingForPushToTalkResults = false
+        print("🎤 Session reset complete")
+    }
+    
+    private func performStart() throws {
+        setState(.listening)
+        
+        // Setup recognition request
+        try setupRecognitionRequest()
+        
+        // Setup and start audio engine
+        try setupAudioEngine()
+        try startAudioEngine()
+        
+        // Start recognition task
+        startRecognitionTask()
+        
+        // Mark as actively recording
+        isActivelyRecording = true
+        hasReceivedAnyResults = false
+        
+        // Notify delegate
+        delegate?.dictationEngineDidStart(self)
+        print("🎤 Recording started successfully")
     }
     
     private func setupRecognitionRequest() throws {
+        // Clean up any existing task
         recognitionTask?.cancel()
         recognitionTask = nil
         
-        guard let speechRecognizer = speechRecognizer else {
-            throw DictationError.speechRecognizerUnavailable
-        }
-        
+        // Create new request
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
             throw DictationError.recognitionRequestCreationFailed
@@ -248,37 +229,21 @@ class DictationEngine: NSObject {
         
         recognitionRequest.shouldReportPartialResults = true
         
-        // DISABLE on-device recognition temporarily to fix speech service errors
-        // if #available(macOS 13.0, *), enableOnDeviceRecognition {
-        //     recognitionRequest.requiresOnDeviceRecognition = true
-        //     print("🎯 DictationEngine: On-device recognition enabled")
-        // }
+        // NO on-device recognition - use server for reliability
+        print("🎤 Using server-based recognition for maximum reliability")
         
-        // Apply smart features only in smart processing mode
+        // Apply contextual strings for medical vocabulary
         if processingMode == .smart {
-            applySmartFeatures(to: recognitionRequest)
-        } else {
-            print("⚡ DictationEngine: Fast processing - skipping smart features")
-        }
-    }
-    
-    private func applySmartFeatures(to request: SFSpeechAudioBufferRecognitionRequest) {
-        let shouldApplyContextualStrings = smartTextCoordinator?.enableContextualStrings ?? true
-        
-        if shouldApplyContextualStrings {
             let contextualStrings = VocabularyManager.shared.getContextualStrings()
             if !contextualStrings.isEmpty {
-                request.contextualStrings = contextualStrings
-                print("🎯 DictationEngine: Applied \(contextualStrings.count) contextual strings")
-            } else {
-                print("⚠️ DictationEngine: No contextual strings available!")
+                recognitionRequest.contextualStrings = contextualStrings
+                print("🎯 Applied \(contextualStrings.count) medical terms")
             }
-        } else {
-            print("⚡ DictationEngine: Contextual strings DISABLED for performance testing")
         }
     }
     
     private func setupAudioEngine() throws {
+        // Stop any existing audio engine
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
@@ -287,21 +252,21 @@ class DictationEngine: NSObject {
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
+        // Install audio tap
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
         
         audioEngine.prepare()
-        print("🎤 DictationEngine: Audio engine configured")
+        print("🎤 Audio engine configured")
     }
     
     private func startAudioEngine() throws {
         do {
             try audioEngine.start()
-            print("🎤 DictationEngine: Audio engine started")
+            print("🎤 Audio engine started")
         } catch {
-            print("❌ DictationEngine: Audio engine failed: \(error)")
             throw DictationError.audioEngineFailure(error)
         }
     }
@@ -309,216 +274,242 @@ class DictationEngine: NSObject {
     private func startRecognitionTask() {
         guard let speechRecognizer = speechRecognizer,
               let recognitionRequest = recognitionRequest else {
-            print("❌ Cannot start recognition task - missing components")
+            print("❌ Cannot start recognition - missing components")
             return
         }
         
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            guard let self = self else { return }
-            
-            // Check if user requested stop before processing results
-            if self.userRequestedStop {
-                print("🎤 Ignoring recognition result - user requested stop")
+            self?.handleRecognitionCallback(result: result, error: error)
+        }
+        
+        print("🎤 Recognition task started")
+    }
+    
+    // MARK: - Recognition Callback Handling
+    
+    private func handleRecognitionCallback(result: SFSpeechRecognitionResult?, error: Error?) {
+        // Always run on main queue for thread safety
+        DispatchQueue.main.async {
+            self.processRecognitionCallback(result: result, error: error)
+        }
+    }
+    
+    private func processRecognitionCallback(result: SFSpeechRecognitionResult?, error: Error?) {
+        // Check if user requested stop - ignore all results if so
+        if userRequestedStop {
+            print("🎤 Ignoring callback - user requested stop")
+            return
+        }
+        
+        // Handle successful result
+        if let result = result {
+            handleSpeechResult(result)
+        }
+        
+        // Handle errors (only if user didn't request stop)
+        if let error = error {
+            handleRecognitionError(error)
+        }
+    }
+    
+    private func handleSpeechResult(_ result: SFSpeechRecognitionResult) {
+        let text = result.bestTranscription.formattedString
+        let isFinal = result.isFinal
+        let hasMetadata = result.speechRecognitionMetadata != nil
+        
+        print("🎤 Speech result: '\(text)' (final: \(isFinal), metadata: \(hasMetadata))")
+        
+        // Mark that we've received results
+        hasReceivedAnyResults = true
+        currentText = text
+        
+        // Process final results with metadata (highest quality)
+        if hasMetadata {
+            print("🎤 ✨ Final result with metadata - processing")
+            processFinalResult(text)
+        }
+        // For push-to-talk, also process when stream ends (isFinal)
+        else if isFinal && dictationMode == .pushToTalk {
+            print("🎤 📱 Push-to-talk final result - processing")
+            processFinalResult(text)
+        }
+        // For toggle mode, update current text but don't send yet
+        else if dictationMode == .toggle {
+            print("🎤 📝 Toggle mode partial result - buffering")
+            // Just buffer the text, don't send until we get metadata or user stops
+        }
+    }
+    
+    private func processFinalResult(_ text: String) {
+        let trimmedText = text.trimmingCharacters(in: .whitespaces)
+        
+        // Skip empty or duplicate results
+        guard !trimmedText.isEmpty && trimmedText != lastProcessedText else {
+            print("🎤 Skipping empty/duplicate result")
+            return
+        }
+        
+        // Prevent concurrent processing
+        guard !isProcessingResults else {
+            print("🎤 Already processing results - skipping")
+            return
+        }
+        
+        isProcessingResults = true
+        lastProcessedText = trimmedText
+        
+        print("🎤 🚀 Processing final result: '\(trimmedText)'")
+        
+        setState(.processing)
+        delegate?.dictationEngine(self, didProcessText: trimmedText)
+        
+        // Reset processing flag
+        isProcessingResults = false
+        
+        // Return to listening if still recording
+        if isActivelyRecording && !userRequestedStop {
+            setState(.listening)
+        }
+    }
+    
+    private func handleRecognitionError(_ error: Error) {
+        print("❌ Recognition error: \(error.localizedDescription)")
+        
+        // Only handle error if user didn't request stop (errors during stop are expected)
+        if !userRequestedStop {
+            // Check if this is a "no speech detected" error during first few seconds
+            let errorDescription = error.localizedDescription.lowercased()
+            if errorDescription.contains("no speech") && !hasReceivedAnyResults {
+                print("🎤 No speech detected - this is normal for silence")
+                // Don't treat "no speech" as a fatal error, just continue listening
                 return
             }
             
-            if let result = result {
-                self.handleRecognitionResult(result)
-            }
-            
-            if let error = error {
-                print("❌ DictationEngine: Recognition error: \(error.localizedDescription)")
-                
-                // Only report error if user didn't request stop
-                if !self.userRequestedStop {
-                    DispatchQueue.main.async {
-                        let dictationError = DictationError.recognitionTaskFailed(error)
-                        self.delegate?.dictationEngine(self, didEncounterError: dictationError)
-                        self.stopDictation()
-                    }
-                }
-            }
-        }
-        
-        print("🎤 DictationEngine: Recognition task started")
-    }
-    
-    // MARK: - Recognition Result Handling
-    
-    private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
-        // Skip processing if user requested stop
-        guard !userRequestedStop else {
-            print("🎤 Skipping result processing - user requested stop")
-            return
-        }
-        
-        let text = result.bestTranscription.formattedString
-        let hasMetadata = result.speechRecognitionMetadata != nil
-        
-        print("🎤 Apple result: text='\(text)', isFinal=\(result.isFinal), hasMetadata=\(hasMetadata)")
-        
-        if hasMetadata {
-            handleTrueFinalResult(text: text, result: result)
-        } else {
-            handlePartialResult(text: text)
-        }
-        
-        if result.isFinal {
-            handleStreamEnd()
-        }
-    }
-    
-    private func handleTrueFinalResult(text: String, result: SFSpeechRecognitionResult) {
-        guard !isCurrentlyProcessing && !userRequestedStop else {
-            print("🎤 Skipping final result - already processing or user stopped")
-            return
-        }
-        
-        let textToProcess = text.trimmingCharacters(in: .whitespaces)
-        
-        guard !textToProcess.isEmpty && textToProcess != lastProcessedText else {
-            print("🎤 Skipping empty or duplicate final result")
-            return
-        }
-        
-        isCurrentlyProcessing = true
-        lastProcessedText = textToProcess
-        
-        // Cancel push-to-talk background processing since we got the final result
-        if dictationMode == .pushToTalk && isWaitingForFinalResult {
-            print("🎤 Push-to-talk: Got metadata result, cancelling background processing")
-            isWaitingForFinalResult = false
-        }
-        
-        print("🎤 ✨ Processing FINAL result: '\(textToProcess)'")
-        
-        DispatchQueue.main.async {
-            self.setState(.processing)
-            self.delegate?.dictationEngine(self, didProcessText: textToProcess)
-            self.isCurrentlyProcessing = false
-            
-            if self.isRecording && !self.userRequestedStop {
-                self.setState(.listening)
-            }
-        }
-    }
-    
-    private func handlePartialResult(text: String) {
-        currentPartialText = text
-        
-        if !text.isEmpty {
-            print("🎤 🔄 Partial result: '\(text)'")
-        }
-    }
-    
-    private func handleStreamEnd() {
-        print("🎤 🟥 Recognition stream ended")
-        
-        switch dictationMode {
-        case .toggle:
-            // Continue listening until user stops
-            break
-        case .pushToTalk:
-            // Already handled in handlePushToTalkStop()
-            break
+            // For other errors, stop and notify
+            print("❌ Fatal recognition error - stopping dictation")
+            handleError(DictationError.recognitionTaskFailed(error))
+            performCleanStop()
         }
     }
     
     // MARK: - Mode-Specific Stop Handling
     
     private func handleToggleStop() {
-        print("🎤 Toggle mode: Processing any remaining text")
+        print("🎤 Toggle stop: Processing any buffered text")
         
-        // Process any unprocessed partial text as fallback
-        if !currentPartialText.isEmpty && currentPartialText != lastProcessedText {
-            let textToProcess = currentPartialText.trimmingCharacters(in: .whitespaces)
-            if !textToProcess.isEmpty {
-                print("🎤 Toggle mode: Processing partial text: '\(textToProcess)'")
-                lastProcessedText = textToProcess
-                
-                DispatchQueue.main.async {
-                    self.setState(.processing)
-                    self.delegate?.dictationEngine(self, didProcessText: textToProcess)
-                }
+        // Process any unprocessed text
+        if !currentText.isEmpty && currentText != lastProcessedText {
+            let trimmedText = currentText.trimmingCharacters(in: .whitespaces)
+            if !trimmedText.isEmpty {
+                print("🎤 Toggle stop: Sending buffered text: '\(trimmedText)'")
+                setState(.processing)
+                delegate?.dictationEngine(self, didProcessText: trimmedText)
+                lastProcessedText = trimmedText
             }
         }
+        
+        // Clean stop
+        performCleanStop()
     }
     
     private func handlePushToTalkStop() {
-        print("🎤 Push-to-talk: Starting background processing")
+        print("🎤 Push-to-talk stop: Ending audio and waiting for final results")
         
-        pushToTalkBackgroundQueue = DispatchQueue(label: "pushToTalkProcessing", qos: .userInitiated)
+        // End audio input to signal completion
         recognitionRequest?.endAudio()
-        isWaitingForFinalResult = true
         
-        pushToTalkBackgroundQueue?.async { [weak self] in
-            guard let self = self else { return }
+        // If we haven't received any results yet, wait a bit
+        if !hasReceivedAnyResults {
+            print("🎤 Push-to-talk: No results yet - waiting \(pushToTalkTimeout)s for results")
+            isWaitingForPushToTalkResults = true
             
-            var waitCount = 0
-            let maxWaitCycles = 30 // 3 seconds total
-            
-            while self.isWaitingForFinalResult && waitCount < maxWaitCycles && !self.userRequestedStop {
-                Thread.sleep(forTimeInterval: 0.1)
-                waitCount += 1
+            pushToTalkTimeoutTimer = Timer.scheduledTimer(withTimeInterval: pushToTalkTimeout, repeats: false) { [weak self] _ in
+                self?.handlePushToTalkTimeout()
             }
-            
-            if self.isWaitingForFinalResult && !self.userRequestedStop {
-                print("🎤 Push-to-talk: Timeout - processing partial text")
-                DispatchQueue.main.async {
-                    if !self.currentPartialText.isEmpty {
-                        let textToProcess = self.currentPartialText.trimmingCharacters(in: .whitespaces)
-                        if !textToProcess.isEmpty && textToProcess != self.lastProcessedText {
-                            print("🎤 Push-to-talk: Processing partial: '\(textToProcess)'")
-                            self.lastProcessedText = textToProcess
-                            self.delegate?.dictationEngine(self, didProcessText: textToProcess)
-                        }
-                    }
-                    self.isWaitingForFinalResult = false
-                }
+        } else {
+            // We have results, process them
+            print("🎤 Push-to-talk: Have results - processing immediately")
+            if !currentText.isEmpty && currentText != lastProcessedText {
+                processFinalResult(currentText)
             }
-        }
-        
-        DispatchQueue.main.async {
-            self.finalizePushToTalkStop()
+            performCleanStop()
         }
     }
     
-    private func finalizePushToTalkStop() {
-        isWaitingForFinalResult = false
+    private func handlePushToTalkTimeout() {
+        print("🎤 Push-to-talk timeout - processing any available text")
+        pushToTalkTimeoutTimer = nil
+        isWaitingForPushToTalkResults = false
+        
+        // Process whatever text we have
+        if !currentText.isEmpty && currentText != lastProcessedText {
+            processFinalResult(currentText)
+        }
+        
+        performCleanStop()
+    }
+    
+    // MARK: - Error Handling
+    
+    private func handleError(_ error: DictationError) {
+        setState(.error)
+        delegate?.dictationEngine(self, didEncounterError: error)
+    }
+    
+    private func handleStartFailure(_ error: Error) {
+        setState(.error)
+        
+        let dictationError: DictationError
+        if let existing = error as? DictationError {
+            dictationError = existing
+        } else {
+            dictationError = DictationError.recognitionTaskFailed(error)
+        }
+        
+        delegate?.dictationEngine(self, didEncounterError: dictationError)
+    }
+    
+    // MARK: - Clean Shutdown
+    
+    private func performCleanStop() {
+        print("🎤 Performing clean stop")
+        
+        // Cancel timers
+        pushToTalkTimeoutTimer?.invalidate()
+        pushToTalkTimeoutTimer = nil
+        
+        // Clean up recognition
         cleanupRecognition()
+        
+        // Update state
+        isActivelyRecording = false
+        isWaitingForPushToTalkResults = false
         setState(.ready)
-        isRecording = false
+        
+        // Notify delegate
         delegate?.dictationEngineDidStop(self)
-        print("🎤 Push-to-talk: Stop completed")
+        print("🎤 ✅ Clean stop completed")
     }
-    
-    // MARK: - State Management
-    
-    private func setState(_ newState: DictationState) {
-        state = newState
-    }
-    
-    // MARK: - Cleanup
     
     private func cleanupRecognition() {
-        currentPartialText = ""
-        lastProcessedText = ""
-        isCurrentlyProcessing = false
-        isWaitingForFinalResult = false
-        pushToTalkBackgroundQueue = nil
-        
+        // Stop audio engine
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
         }
         
+        // Stop recognition
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         
         recognitionRequest = nil
         recognitionTask = nil
         
-        print("🎤 DictationEngine: Recognition cleaned up")
+        print("🎤 Recognition components cleaned up")
+    }
+    
+    private func setState(_ newState: DictationState) {
+        state = newState
     }
 }
 
@@ -527,8 +518,8 @@ class DictationEngine: NSObject {
 extension DictationEngine: SFSpeechRecognizerDelegate {
     func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
         DispatchQueue.main.async {
-            if !available && self.isRecording {
-                print("⚠️ DictationEngine: Speech recognizer unavailable")
+            if !available && self.isActivelyRecording {
+                print("⚠️ Speech recognizer became unavailable")
                 self.stopDictation()
             }
         }
