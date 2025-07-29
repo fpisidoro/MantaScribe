@@ -204,8 +204,10 @@ class DictationEngine: NSObject {
         try setupAudioEngine()
         try startAudioEngine()
         
-        // Start recognition task
-        startRecognitionTask()
+        // Brief delay for audio engine stabilization (helps with first dictation reliability)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.startRecognitionTask()
+        }
         
         // Mark as actively recording
         isActivelyRecording = true

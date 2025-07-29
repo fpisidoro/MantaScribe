@@ -215,11 +215,19 @@ class AppTargetManager {
             return text
         }
         
-        if shouldCapitalize {
-            return capitalizeFirstWord(text)
-        } else {
-            return makeFirstWordLowercase(text)
+        // IMPORTANT: When SmartTextCoordinator is enabled, it handles ALL capitalization
+        // We should NOT override its decisions here
+        print("📝 Smart formatting: shouldCapitalize=\(shouldCapitalize), text='\(text)'")
+        
+        // If SmartTextCoordinator already processed the text, don't modify it further
+        // SmartTextCoordinator sends shouldCapitalize=false when it has already handled capitalization
+        if !shouldCapitalize {
+            print("📝 Smart formatting: Preserving text as-is (SmartText already processed)")
+            return text
         }
+        
+        // Only apply capitalization if specifically requested
+        return capitalizeFirstWord(text)
     }
     
     private func applySmartSpacing(to text: String, needsLeadingSpace: Bool, needsTrailingSpace: Bool) -> String {

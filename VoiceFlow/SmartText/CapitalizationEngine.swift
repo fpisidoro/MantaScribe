@@ -53,6 +53,10 @@ class CapitalizationEngine {
                 result = capitalizedFirst
                 wasModified = true
                 reason = "Capitalized first word due to cursor context"
+            } else {
+                // Already capitalized - still consider this "modified" to indicate we processed it
+                wasModified = true
+                reason = "First word already capitalized correctly"
             }
         } else {
             let lowercaseFirst = makeFirstWordLowercase(result)
@@ -71,9 +75,7 @@ class CapitalizationEngine {
             reason += (reason.isEmpty ? "" : " + ") + "Capitalized after internal punctuation"
         }
         
-        if wasModified {
-            print("🔤 Capitalization result: '\(result)' (\(reason))")
-        }
+        print("🔤 Capitalization result: '\(result)' (modified: \(wasModified), reason: '\(reason)')")
         
         return CapitalizationResult(text: result, wasModified: wasModified, reason: reason)
     }
