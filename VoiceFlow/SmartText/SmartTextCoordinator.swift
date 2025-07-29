@@ -144,6 +144,7 @@ class SmartTextCoordinator {
             
             // Determine if we should capitalize based on cursor context
             let shouldCapitalize = detectionResult.context.shouldCapitalize
+            print("🧠 🔤 Capitalization analysis: context=\(detectionResult.context), shouldCapitalize=\(shouldCapitalize)")
             
             // Apply real CapitalizationEngine
             capitalizationResult = capitalizationEngine.applyCapitalization(
@@ -151,13 +152,19 @@ class SmartTextCoordinator {
                 shouldCapitalizeStart: shouldCapitalize
             )
             
+            print("🧠 🔤 CapitalizationEngine result: \(capitalizationResult?.reason ?? "nil result")")
+            
             if let result = capitalizationResult, result.wasModified {
                 processedText = result.text
                 print("🧠 ✅ Smart capitalization applied: '\(text)' → '\(processedText)' (\(result.reason))")
+            } else {
+                print("🧠 ⚠️ No capitalization applied - result: \(capitalizationResult?.description ?? "nil")")
             }
             
             let capsTime = (CFAbsoluteTimeGetCurrent() - capsStartTime) * 1000
             appliedFeatures.append("Smart Capitalization (\(String(format: "%.1f", capsTime))ms)")
+        } else {
+            print("🧠 ⚠️ Smart capitalization skipped: enabled=\(enableSmartCapitalization), detectionResult=\(cursorDetectionResult != nil)")
         }
         
         // Send processed text with smart formatting
@@ -257,5 +264,13 @@ extension CursorDetector.CursorContext: CustomStringConvertible {
         case .unknown:
             return "Unknown"
         }
+    }
+}
+
+// MARK: - CapitalizationResult Extension for Better Logging
+
+extension CapitalizationEngine.CapitalizationResult: CustomStringConvertible {
+    var description: String {
+        return "CapitalizationResult(text: '\(text)', wasModified: \(wasModified), reason: '\(reason)')"
     }
 }

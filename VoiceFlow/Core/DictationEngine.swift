@@ -248,11 +248,11 @@ class DictationEngine: NSObject {
         
         recognitionRequest.shouldReportPartialResults = true
         
-        // Enable on-device recognition if available
-        if #available(macOS 13.0, *), enableOnDeviceRecognition {
-            recognitionRequest.requiresOnDeviceRecognition = true
-            print("🎯 DictationEngine: On-device recognition enabled")
-        }
+        // DISABLE on-device recognition temporarily to fix speech service errors
+        // if #available(macOS 13.0, *), enableOnDeviceRecognition {
+        //     recognitionRequest.requiresOnDeviceRecognition = true
+        //     print("🎯 DictationEngine: On-device recognition enabled")
+        // }
         
         // Apply smart features only in smart processing mode
         if processingMode == .smart {
