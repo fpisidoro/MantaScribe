@@ -64,7 +64,6 @@ class DictationEngine: NSObject {
     private var hasPendingDictationRequest = false
     private var isSystemWarming = false
     private var warmupTimer: Timer?
-    private var appStartTime = Date()  // Track when app started
     
     // State
     private(set) var state: DictationState = .idle {
@@ -89,48 +88,7 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Initialized with simple queue system")
     }
     
-    // MARK: - System Readiness Check
-    
-    private func isSystemReady() -> Bool {
-        // Quick speech recognizer check
-        guard let speechRecognizer = speechRecognizer,
-              speechRecognizer.isAvailable else {
-            print("⚠️ Speech recognizer not available")
-            return false
-        }
-        
-        // Always use warmup for first 10 seconds after app start
-        let timeSinceStart = Date().timeIntervalSince(appStartTime)
-        if timeSinceStart < 10.0 {
-            print("⚠️ System not ready: App started \(String(format: "%.1f", timeSinceStart))s ago (warmup period)")
-            return false
-        }
-        
-        // REAL TEST: Exactly mirror the actual dictation setup
-        do {
-            let testEngine = AVAudioEngine()
-            let inputNode = testEngine.inputNode
-            let recordingFormat = inputNode.outputFormat(forBus: 0)
-            
-            // Use the same buffer size as real dictation
-            inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: recordingFormat) { _, _ in }
-            testEngine.prepare()
-            try testEngine.start()
-            
-            // Actually test for a brief moment like real usage
-            Thread.sleep(forTimeInterval: 0.05)
-            
-            // Clean up
-            testEngine.stop()
-            inputNode.removeTap(onBus: 0)
-            
-            print("✅ System readiness check passed (realistic audio test)")
-            return true
-        } catch {
-            print("⚠️ System readiness check failed: \(error.localizedDescription)")
-            return false
-        }
-    }
+    // MARK: - System Warmup
     
     private func queueDictationAndWarmup() {
         guard !isSystemWarming else {
@@ -197,7 +155,18 @@ class DictationEngine: NSObject {
         if hasPendingDictationRequest {
             hasPendingDictationRequest = false
             print("🚀 Executing queued dictation request")
-            startDictation()
+            
+            // Reset state for fresh start
+            resetSession()
+            
+            // Start the recognition process
+            do {
+                try performStart()
+                print("🎤 ✅ Dictation started successfully in \(dictationMode) mode")
+            } catch {
+                print("❌ Failed to start dictation after warmup: \(error)")
+                handleError(DictationError.audioEngineFailure(error))
+            }
         }
     }
     
@@ -211,7 +180,18 @@ class DictationEngine: NSObject {
         if hasPendingDictationRequest {
             hasPendingDictationRequest = false
             print("🤷‍♂️ Attempting queued dictation despite warmup failure")
-            startDictation()
+            
+            // Reset state for fresh start
+            resetSession()
+            
+            // Start the recognition process
+            do {
+                try performStart()
+                print("🎤 ✅ Dictation started successfully in \(dictationMode) mode")
+            } catch {
+                print("❌ Failed to start dictation after failed warmup: \(error)")
+                handleError(DictationError.audioEngineFailure(error))
+            }
         }
     }
     
@@ -242,7 +222,7 @@ class DictationEngine: NSObject {
         self.smartTextCoordinator = coordinator
     }
     
-    /// Start dictation - Simple try-first approach
+    /// Start dictation - Always use queue for reliability
     func startDictation() {
         print("🎤 ═══ START DICTATION REQUEST ═══")
         print("🎤 Current state: \(state), isActivelyRecording: \(isActivelyRecording)")
@@ -262,41 +242,9 @@ class DictationEngine: NSObject {
             return
         }
         
-        // Quick system readiness check
-        if !isSystemReady() {
-            print("⚠️ System not ready - queuing request and warming up")
-            queueDictationAndWarmup()
-            return
-        }
-        
-        // System is ready - try to start immediately
-        print("✅ System ready - starting dictation immediately")
-        
-        // Reset state for fresh start
-        resetSession()
-        
-        // Start the recognition process
-        do {
-            try performStart()
-            print("🎤 ✅ Dictation started successfully in \(dictationMode) mode")
-        } catch {
-            print("❌ Failed to start dictation: \(error)")
-            
-            // Check if this is a cold start error that needs warmup
-            if let dictationError = error as? DictationError,
-               case .audioEngineFailure(let underlyingError) = dictationError {
-                let nsError = underlyingError as NSError
-                if nsError.code == -10877 {
-                    print("🔄 Cold start detected - falling back to queue and warmup")
-                    queueDictationAndWarmup()
-                    return
-                }
-            }
-            
-            // For other errors, still try queue and warmup as fallback
-            print("🔄 Start failed - falling back to queue and warmup")
-            queueDictationAndWarmup()
-        }
+        // ALWAYS queue and warm up for reliability
+        print("🔄 Using queue system for reliable startup")
+        queueDictationAndWarmup()
     }
     
     /// Stop dictation - BULLETPROOF VERSION  
