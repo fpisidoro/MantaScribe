@@ -64,6 +64,7 @@ class DictationEngine: NSObject {
     private var hasPendingDictationRequest = false
     private var isSystemWarming = false
     private var warmupTimer: Timer?
+    private var appStartTime = Date()  // Track when app started
     
     // State
     private(set) var state: DictationState = .idle {
@@ -98,22 +99,32 @@ class DictationEngine: NSObject {
             return false
         }
         
-        // REAL TEST: Can we actually start audio capture?
+        // Always use warmup for first 10 seconds after app start
+        let timeSinceStart = Date().timeIntervalSince(appStartTime)
+        if timeSinceStart < 10.0 {
+            print("⚠️ System not ready: App started \(String(format: "%.1f", timeSinceStart))s ago (warmup period)")
+            return false
+        }
+        
+        // REAL TEST: Exactly mirror the actual dictation setup
         do {
             let testEngine = AVAudioEngine()
             let inputNode = testEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
             
-            // Try to install tap and start - this will fail if system is cold
-            inputNode.installTap(onBus: 0, bufferSize: 512, format: recordingFormat) { _, _ in }
+            // Use the same buffer size as real dictation
+            inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: recordingFormat) { _, _ in }
             testEngine.prepare()
             try testEngine.start()
             
-            // If we got here, system is actually ready
+            // Actually test for a brief moment like real usage
+            Thread.sleep(forTimeInterval: 0.05)
+            
+            // Clean up
             testEngine.stop()
             inputNode.removeTap(onBus: 0)
             
-            print("✅ System readiness check passed (audio engine test)")
+            print("✅ System readiness check passed (realistic audio test)")
             return true
         } catch {
             print("⚠️ System readiness check failed: \(error.localizedDescription)")
@@ -271,8 +282,19 @@ class DictationEngine: NSObject {
         } catch {
             print("❌ Failed to start dictation: \(error)")
             
-            // If immediate start failed, try queuing and warming
-            print("🔄 Immediate start failed - falling back to queue and warmup")
+            // Check if this is a cold start error that needs warmup
+            if let dictationError = error as? DictationError,
+               case .audioEngineFailure(let underlyingError) = dictationError {
+                let nsError = underlyingError as NSError
+                if nsError.code == -10877 {
+                    print("🔄 Cold start detected - falling back to queue and warmup")
+                    queueDictationAndWarmup()
+                    return
+                }
+            }
+            
+            // For other errors, still try queue and warmup as fallback
+            print("🔄 Start failed - falling back to queue and warmup")
             queueDictationAndWarmup()
         }
     }
@@ -422,7 +444,15 @@ class DictationEngine: NSObject {
             try audioEngine.start()
             print("🎤 Audio engine started")
         } catch {
-            throw DictationError.audioEngineFailure(error)
+            // Check if this is the common cold-start error
+            let nsError = error as NSError
+            if nsError.code == -10877 {
+                print("⚠️ Audio engine cold start detected (-10877) - system needs warmup")
+                throw DictationError.audioEngineFailure(error)
+            } else {
+                print("❌ Audio engine failed with: \(error.localizedDescription)")
+                throw DictationError.audioEngineFailure(error)
+            }
         }
     }
     
