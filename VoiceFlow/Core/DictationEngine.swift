@@ -1,10 +1,8 @@
 import Foundation
 import Speech
 import AVFoundation
-import AudioToolbox
-import CoreAudio
 
-/// Professional dictation engine using Core Audio for bulletproof first-press reliability
+/// Professional dictation engine using AVAudioEngine for reliable speech recognition
 class DictationEngine: NSObject {
     
     // MARK: - Types
@@ -44,12 +42,9 @@ class DictationEngine: NSObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var smartTextCoordinator: SmartTextCoordinator?
     
-    // Core Audio Components
-    private var audioQueue: AudioQueueRef?
-    private var audioFormat = AudioStreamBasicDescription()
-    private var audioBuffers: [AudioQueueBufferRef?] = []
-    private let numberOfBuffers = 3
-    private let bufferSize: UInt32 = 8192  // Larger buffer for Core Audio
+    // AVAudioEngine Components (REVERTED: Core Audio was too complex)
+    private var audioEngine: AVAudioEngine?
+    private var inputNode: AVAudioInputNode?
     
     // Mode Management
     private var dictationMode: DictationMode = .toggle
@@ -87,7 +82,6 @@ class DictationEngine: NSObject {
     override init() {
         super.init()
         setupSpeechRecognizer()
-        setupCoreAudioFormat()
         setState(.ready)
         
         // Warm up microphone on app launch
@@ -95,107 +89,87 @@ class DictationEngine: NSObject {
             self.warmUpMicrophone()
         }
         
-        print("🎤 DictationEngine: Initialized with Core Audio for professional reliability")
+        print("🎤 DictationEngine: Initialized with AVAudioEngine for professional reliability")
     }
     
     deinit {
-        cleanupCoreAudio()
+        cleanupAudioEngine()
     }
     
-    // MARK: - Core Audio Setup
+    // MARK: - AVAudioEngine Setup
     
-    private func setupCoreAudioFormat() {
-        // Configure professional audio format
-        audioFormat.mSampleRate = 44100.0
-        audioFormat.mFormatID = kAudioFormatLinearPCM
-        audioFormat.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked
-        audioFormat.mBitsPerChannel = 16
-        audioFormat.mChannelsPerFrame = 1  // Mono
-        audioFormat.mBytesPerFrame = 2     // 16-bit mono
-        audioFormat.mFramesPerPacket = 1
-        audioFormat.mBytesPerPacket = 2
-        audioFormat.mReserved = 0
+    private func setupAudioEngine() throws {
+        print("🔊 Setting up AVAudioEngine...")
         
-        print("🔊 Core Audio format configured: 44.1kHz, 16-bit, mono")
-    }
-    
-    private func createCoreAudioQueue() throws {
-        print("🔊 Creating Core Audio input queue...")
-        
-        // Create audio queue for recording
-        let callbackPointer = unsafeBitCast(self, to: UnsafeMutableRawPointer.self)
-        let status = AudioQueueNewInput(
-            &audioFormat,
-            audioQueueCallback,
-            callbackPointer,
-            CFRunLoopGetCurrent(),
-            CFRunLoopMode.commonModes.rawValue,
-            0,
-            &audioQueue
-        )
-        
-        guard status == noErr, let queue = audioQueue else {
-            print("❌ Failed to create Core Audio queue: \(status)")
-            throw DictationError.audioQueueCreationFailed(status)
+        audioEngine = AVAudioEngine()
+        guard let audioEngine = audioEngine else {
+            throw DictationError.coreAudioFailure(NSError(domain: "AudioEngine", code: -1))
         }
         
-        // Configure queue properties for optimal recording
-        var enableLevelMetering: UInt32 = 1
-        AudioQueueSetProperty(queue, kAudioQueueProperty_EnableLevelMetering, &enableLevelMetering, UInt32(MemoryLayout<UInt32>.size))
+        inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode?.outputFormat(forBus: 0)
         
-        // Create and enqueue buffers
-        audioBuffers = []
-        for i in 0..<numberOfBuffers {
-            var buffer: AudioQueueBufferRef?
-            let bufferStatus = AudioQueueAllocateBuffer(queue, bufferSize, &buffer)
+        guard let format = recordingFormat else {
+            throw DictationError.coreAudioFailure(NSError(domain: "AudioFormat", code: -1))
+        }
+        
+        inputNode?.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
+        }
+        
+        audioEngine.prepare()
+        print("✅ AVAudioEngine setup completed")
+    }
+    
+    private func startAudioEngine() throws {
+        guard let audioEngine = audioEngine else {
+            throw DictationError.coreAudioFailure(NSError(domain: "AudioEngine", code: -1))
+        }
+        
+        print("🔊 Starting AVAudioEngine...")
+        try audioEngine.start()
+        print("✅ AVAudioEngine started successfully!")
+    }
+    
+    // MARK: - Public Interface
+    
+    func setDictationMode(_ mode: DictationMode) {
+        guard !isActivelyRecording else {
+            print("🎤 Cannot change mode while recording")
+            return
+        }
+        dictationMode = mode
+        print("🎤 DictationEngine: Mode set to \(mode)")
+    }
+    
+    func updatePerformanceMode(_ smartModeEnabled: Bool) {
+        processingMode = smartModeEnabled ? .smart : .fast
+        print("🎤 DictationEngine: Processing mode set to \(processingMode)")
+    }
+    
+    func setSmartTextCoordinator(_ coordinator: SmartTextCoordinator) {
+        self.smartTextCoordinator = coordinator
+    }
+    
+    /// Start dictation with AVAudioEngine
+    func startDictation() {
+        print("🎤 ═══ START DICTATION REQUEST ═══")
+        print("🎤 Current state: \(state), isActivelyRecording: \(isActivelyRecording)")
+        
+        userRequestedStop = false
+        
+        guard !isActivelyRecording else {
+            print("🎤 Already recording - ignoring duplicate start request")
+            return
+        }
+        
+        do {
+            try performAVAudioEngineStart()
+            print("🎤 ✅ AVAudioEngine dictation started successfully in \(dictationMode) mode")
             
-            if bufferStatus == noErr, let audioBuffer = buffer {
-                audioBuffers.append(audioBuffer)
-                AudioQueueEnqueueBuffer(queue, audioBuffer, 0, nil)
-                print("🔊 Created Core Audio buffer \(i + 1) (\(bufferSize) bytes)")
-            } else {
-                print("❌ Failed to create Core Audio buffer \(i + 1): \(bufferStatus)")
-                throw DictationError.audioQueueCreationFailed(bufferStatus)
-            }
-        }
-        
-        print("✅ Core Audio queue created successfully with \(numberOfBuffers) buffers")
-    }
-    
-    // MARK: - Core Audio Callback
-    
-    private let audioQueueCallback: AudioQueueInputCallback = { userData, queue, bufferRef, startTime, numPackets, packetDescs in
-        
-        guard let userData = userData else { return }
-        let dictationEngine = Unmanaged<DictationEngine>.fromOpaque(userData).takeUnretainedValue()
-        
-        // Process the audio data
-        dictationEngine.processAudioBuffer(buffer: bufferRef, packetCount: numPackets)
-        
-        // Re-enqueue the buffer for continuous recording
-        AudioQueueEnqueueBuffer(queue, bufferRef, 0, nil)
-    }
-    
-    private func processAudioBuffer(buffer: AudioQueueBufferRef, packetCount: UInt32) {
-        // CRITICAL: Check all conditions that should stop audio processing
-        guard isActivelyRecording, 
-              !userRequestedStop,
-              !recognitionTaskFailed,
-              recognitionRequest != nil,
-              recognitionTask?.state == .running else { 
-            // Stop processing audio if any condition fails
-            return 
-        }
-        
-        // Convert Core Audio buffer to AVAudioPCMBuffer for speech recognition
-        let audioBuffer = convertToAVAudioBuffer(coreAudioBuffer: buffer, packetCount: packetCount)
-        
-        // Send to speech recognizer (only if request still exists)
-        DispatchQueue.main.async {
-            // Double-check request still exists when executing on main thread
-            if let request = self.recognitionRequest {
-                request.append(audioBuffer)
-            }
+        } catch {
+            print("❌ Failed to start AVAudioEngine dictation: \(error)")
+            handleError(DictationError.coreAudioFailure(error))
         }
     }
     
@@ -222,53 +196,6 @@ class DictationEngine: NSObject {
         return audioBuffer
     }
     
-    // MARK: - Public Interface
-    
-    func setDictationMode(_ mode: DictationMode) {
-        guard !isActivelyRecording else {
-            print("🎤 Cannot change mode while recording")
-            return
-        }
-        dictationMode = mode
-        print("🎤 DictationEngine: Mode set to \(mode)")
-    }
-    
-    func updatePerformanceMode(_ smartModeEnabled: Bool) {
-        processingMode = smartModeEnabled ? .smart : .fast
-        print("🎤 DictationEngine: Processing mode set to \(processingMode)")
-    }
-    
-    func setSmartTextCoordinator(_ coordinator: SmartTextCoordinator) {
-        self.smartTextCoordinator = coordinator
-    }
-    
-    /// Start dictation with Core Audio and automatic retry for first-press reliability
-    func startDictation() {
-        print("🎤 ═══ START DICTATION REQUEST ═══")
-        print("🎤 Current state: \(state), isActivelyRecording: \(isActivelyRecording)")
-        
-        userRequestedStop = false
-        
-        guard !isActivelyRecording else {
-            print("🎤 Already recording - ignoring duplicate start request")
-            return
-        }
-        
-        do {
-            try performCoreAudioStart()
-            print("🎤 ✅ Core Audio dictation started successfully in \(dictationMode) mode")
-            
-            // REMOVED: Auto-retry logic was causing issues
-            // Let's focus on fixing the core issue instead of working around it
-            
-        } catch {
-            print("❌ Failed to start Core Audio dictation: \(error)")
-            handleError(DictationError.coreAudioFailure(error))
-        }
-    }
-    
-    // MARK: - Microphone Warm-Up
-    
     /// Warm up microphone and speech recognition service on app launch
     private func warmUpMicrophone() {
         print("🎵 Warming up microphone and speech recognition service...")
@@ -276,8 +203,8 @@ class DictationEngine: NSObject {
         do {
             // Brief microphone activation to initialize system
             try setupRecognitionRequest()
-            try createCoreAudioQueue()
-            try startCoreAudioRecording()
+            try setupAudioEngine()
+            try startAudioEngine()
             
             // Start a very brief recognition task
             startRecognitionTask()
@@ -299,7 +226,7 @@ class DictationEngine: NSObject {
         print("🎵 Completing microphone warm-up...")
         
         // Clean shutdown of warm-up session
-        cleanupCoreAudio()
+        cleanupAudioEngine()
         cleanupRecognition()
         resetSession()
         
@@ -342,19 +269,17 @@ class DictationEngine: NSObject {
         return state == .ready && !isActivelyRecording
     }
     
-    // MARK: - Core Audio Implementation
+    // MARK: - AVAudioEngine Implementation
     
-    private func performCoreAudioStart() throws {
+    private func performAVAudioEngineStart() throws {
         setState(.listening)
         
         // Setup speech recognition
         try setupRecognitionRequest()
         
-        // Create Core Audio queue
-        try createCoreAudioQueue()
-        
-        // Start Core Audio recording
-        try startCoreAudioRecording()
+        // Setup and start AVAudioEngine
+        try setupAudioEngine()
+        try startAudioEngine()
         
         // Start speech recognition task
         startRecognitionTask()
@@ -368,23 +293,7 @@ class DictationEngine: NSObject {
         
         // Notify delegate
         delegate?.dictationEngineDidStart(self)
-        print("🎤 Core Audio recording started successfully")
-    }
-    
-    private func startCoreAudioRecording() throws {
-        guard let queue = audioQueue else {
-            throw DictationError.audioQueueCreationFailed(-1)
-        }
-        
-        print("🔊 Starting Core Audio recording...")
-        let status = AudioQueueStart(queue, nil)
-        
-        guard status == noErr else {
-            print("❌ Failed to start Core Audio recording: \(status)")
-            throw DictationError.audioQueueCreationFailed(status)
-        }
-        
-        print("✅ Core Audio recording started - no cold start issues!")
+        print("🎤 AVAudioEngine recording started successfully")
     }
     
     private func setupRecognitionRequest() throws {
@@ -582,14 +491,14 @@ class DictationEngine: NSObject {
     }
     
     private func performCleanStop() {
-        print("🎤 Performing clean stop with Core Audio cleanup")
+        print("🎤 Performing clean stop with AVAudioEngine cleanup")
         
         // Cancel timers
         pushToTalkTimeoutTimer?.invalidate()
         pushToTalkTimeoutTimer = nil
         
-        // Clean up Core Audio and recognition
-        cleanupCoreAudio()
+        // Clean up AVAudioEngine and recognition
+        cleanupAudioEngine()
         cleanupRecognition()
         
         // Update state
@@ -599,28 +508,15 @@ class DictationEngine: NSObject {
         
         // Notify delegate
         delegate?.dictationEngineDidStop(self)
-        print("🎤 ✅ Core Audio clean stop completed")
+        print("🎤 ✅ AVAudioEngine clean stop completed")
     }
     
-    private func cleanupCoreAudio() {
-        if let queue = audioQueue {
-            print("🔊 Stopping Core Audio queue...")
-            AudioQueueStop(queue, true)  // true = immediate stop
-            
-            // Dispose of buffers
-            for buffer in audioBuffers {
-                if let audioBuffer = buffer {
-                    AudioQueueFreeBuffer(queue, audioBuffer)
-                }
-            }
-            audioBuffers.removeAll()
-            
-            // Dispose of queue
-            AudioQueueDispose(queue, true)
-            audioQueue = nil
-            
-            print("🔊 Core Audio cleanup completed")
-        }
+    private func cleanupAudioEngine() {
+        inputNode?.removeTap(onBus: 0)
+        audioEngine?.stop()
+        audioEngine = nil
+        inputNode = nil
+        print("🔊 AVAudioEngine cleanup completed")
     }
     
     private func cleanupRecognition() {
