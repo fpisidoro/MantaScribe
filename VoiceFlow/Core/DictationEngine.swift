@@ -123,6 +123,10 @@ class DictationEngine: NSObject {
             self?.recognitionRequest?.append(buffer)
         }
         
+        // Log audio format for debugging
+        let sampleRate = format.sampleRate
+        print("🔊 Audio format: \(format.channelCount) channels, \(sampleRate) Hz")
+        
         audioEngine.prepare()
         print("✅ AVAudioEngine setup completed")
     }
@@ -235,7 +239,7 @@ class DictationEngine: NSObject {
                 
                 // OPTIMIZATION 2: Use faster buffer size for quicker initialization
                 try setupRecognitionRequest()
-                try setupOptimizedAudioEngine()
+                try setupAudioEngine()  // Use same method as regular dictation
                 try startAudioEngine()
                 
                 // OPTIMIZATION 3: Shorter validation period for successful cases
@@ -300,38 +304,6 @@ class DictationEngine: NSObject {
         // Start the retry process
         startTime = CFAbsoluteTimeGetCurrent()
         tryWarmUp()
-    }
-    
-    /// Optimized audio engine setup with reduced buffer size
-    private func setupOptimizedAudioEngine() throws {
-        print("🔊 Setting up optimized AVAudioEngine...")
-        
-        audioEngine = AVAudioEngine()
-        guard let audioEngine = audioEngine else {
-            throw DictationError.audioEngineFailure(NSError(domain: "AudioEngine", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create AudioEngine"]))
-        }
-        
-        inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode?.outputFormat(forBus: 0)
-        
-        guard let format = recordingFormat else {
-            throw DictationError.audioEngineFailure(NSError(domain: "AudioFormat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get recording format"]))
-        }
-        
-        // OPTIMIZATION: Reduced buffer size for faster initialization
-        let optimizedBufferSize: AVAudioFrameCount = 512
-        print("🔊 Using optimized buffer size: \(optimizedBufferSize)")
-        
-        inputNode?.installTap(onBus: 0, bufferSize: optimizedBufferSize, format: format) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-        }
-        
-        // OPTIMIZATION: Sample rate validation to prevent initialization conflicts
-        let sampleRate = format.sampleRate
-        print("🔊 Audio format: \(format.channelCount) channels, \(sampleRate) Hz")
-        
-        audioEngine.prepare()
-        print("✅ Optimized AVAudioEngine setup completed")
     }
     
     /// Clean up warm-up session with performance tracking
