@@ -41,7 +41,7 @@ class DictationEngine: NSObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var smartTextCoordinator: SmartTextCoordinator?
     
-    // AVAudioEngine Components (REVERTED: Core Audio was too complex)
+    // AVAudioEngine Components
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
     
@@ -49,7 +49,7 @@ class DictationEngine: NSObject {
     private var dictationMode: DictationMode = .toggle
     private var processingMode: ProcessingMode = .smart
     
-    // SIMPLIFIED STATE MANAGEMENT
+    // State Management
     private var isActivelyRecording = false
     private var userRequestedStop = false
     private var isProcessingResults = false
@@ -174,9 +174,9 @@ class DictationEngine: NSObject {
         }
     }
     
-    /// Warm up microphone and speech recognition service on app launch
+    /// Initialize microphone and speech recognition on app launch to ensure first-press reliability
     private func warmUpMicrophone() {
-        print("🎵 Warming up microphone and speech recognition service...")
+        print("🎵 Initializing microphone and speech recognition service...")
         
         do {
             // Brief microphone activation to initialize system
@@ -187,7 +187,7 @@ class DictationEngine: NSObject {
             // Start a very brief recognition task
             startRecognitionTask()
             
-            print("🎵 Microphone warm-up initiated")
+            print("🎵 Microphone initialization initiated")
             
             // Stop after 0.5 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -195,20 +195,20 @@ class DictationEngine: NSObject {
             }
             
         } catch {
-            print("⚠️ Microphone warm-up failed: \(error)")
-            // Not critical - just means first press might need retry
+            print("⚠️ Microphone initialization failed: \(error)")
+            // Not critical - first press will still work, just might be slightly slower
         }
     }
     
     private func completeWarmUp() {
-        print("🎵 Completing microphone warm-up...")
+        print("🎵 Completing microphone initialization...")
         
-        // Clean shutdown of warm-up session
+        // Clean shutdown of initialization session
         cleanupAudioEngine()
         cleanupRecognition()
         resetSession()
         
-        print("✅ Microphone warm-up completed - first press should work!")
+        print("✅ Microphone initialization completed - first press optimized!")
     }
     
     /// Stop dictation
