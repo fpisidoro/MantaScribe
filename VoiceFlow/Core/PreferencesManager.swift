@@ -31,6 +31,12 @@ class PreferencesManager {
         static let enableMedicalVocabulary = "enableMedicalVocabulary"
         static let enabledMedicalCategories = "enabledMedicalCategories"
         
+        // Smart Text Developer preferences
+        static let enableLegacyVocabulary = "enableLegacyVocabulary"
+        static let enableContextualStrings = "enableContextualStrings"
+        static let enableSmartSpacing = "enableSmartSpacing"
+        static let enableSmartCapitalization = "enableSmartCapitalization"
+        
         // Window preferences
         static let preferencesWindowFrame = "preferencesWindowFrame"
     }
@@ -152,6 +158,44 @@ class PreferencesManager {
         }
     }
     
+    // MARK: - Smart Text Developer Preferences
+    
+    var enableLegacyVocabulary: Bool {
+        get { UserDefaults.standard.object(forKey: Keys.enableLegacyVocabulary) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Keys.enableLegacyVocabulary)
+            notifyPreferenceChanged(.enableLegacyVocabulary)
+            logSmartTextSettingChange("Legacy Vocabulary", enabled: newValue)
+        }
+    }
+    
+    var enableContextualStrings: Bool {
+        get { UserDefaults.standard.object(forKey: Keys.enableContextualStrings) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Keys.enableContextualStrings)
+            notifyPreferenceChanged(.enableContextualStrings)
+            logSmartTextSettingChange("Contextual Strings", enabled: newValue)
+        }
+    }
+    
+    var enableSmartSpacing: Bool {
+        get { UserDefaults.standard.object(forKey: Keys.enableSmartSpacing) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Keys.enableSmartSpacing)
+            notifyPreferenceChanged(.enableSmartSpacing)
+            logSmartTextSettingChange("Smart Spacing", enabled: newValue)
+        }
+    }
+    
+    var enableSmartCapitalization: Bool {
+        get { UserDefaults.standard.object(forKey: Keys.enableSmartCapitalization) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Keys.enableSmartCapitalization)
+            notifyPreferenceChanged(.enableSmartCapitalization)
+            logSmartTextSettingChange("Smart Capitalization", enabled: newValue)
+        }
+    }
+    
     // MARK: - Window Preferences
     
     var preferencesWindowFrame: NSRect? {
@@ -182,6 +226,10 @@ class PreferencesManager {
         case speechRecognitionLanguage
         case enableMedicalVocabulary
         case enabledMedicalCategories
+        case enableLegacyVocabulary
+        case enableContextualStrings
+        case enableSmartSpacing
+        case enableSmartCapitalization
     }
     
     static let preferenceDidChangeNotification = Notification.Name("PreferenceDidChange")
@@ -196,6 +244,29 @@ class PreferencesManager {
         }
     }
     
+    // MARK: - Smart Text Settings Logging
+    
+    /// Log current smart text settings at startup
+    func logCurrentSmartTextSettings() {
+        print("""
+        
+        🧠 SmartText Settings at Startup:
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        📚 Legacy Vocabulary: \(enableLegacyVocabulary ? "✅ ENABLED" : "❌ DISABLED")
+        🎯 Contextual Strings: \(enableContextualStrings ? "✅ ENABLED" : "❌ DISABLED")
+        📝 Smart Spacing: \(enableSmartSpacing ? "✅ ENABLED" : "❌ DISABLED")
+        🔤 Smart Capitalization: \(enableSmartCapitalization ? "✅ ENABLED" : "❌ DISABLED")
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        
+        """)
+    }
+    
+    /// Log when individual smart text settings change
+    private func logSmartTextSettingChange(_ featureName: String, enabled: Bool) {
+        let status = enabled ? "✅ ENABLED" : "❌ DISABLED"
+        print("🧠 🔧 SmartText Feature Toggled: \(featureName) → \(status)")
+    }
+    
     // MARK: - Utility Methods
     
     /// Reset all preferences to defaults
@@ -203,6 +274,10 @@ class PreferencesManager {
         let domain = Bundle.main.bundleIdentifier!
         UserDefaults.standard.removePersistentDomain(forName: domain)
         UserDefaults.standard.synchronize()
+        
+        // Log that settings were reset
+        print("🔧 All preferences reset to defaults")
+        logCurrentSmartTextSettings()
         
         // Notify all preferences changed
         DispatchQueue.main.async {
@@ -224,7 +299,11 @@ class PreferencesManager {
             key.hasPrefix("performanceMode") ||
             key.hasPrefix("speechRecognitionLanguage") ||
             key.hasPrefix("enableMedicalVocabulary") ||
-            key.hasPrefix("enabledMedicalCategories")
+            key.hasPrefix("enabledMedicalCategories") ||
+            key.hasPrefix("enableLegacyVocabulary") ||
+            key.hasPrefix("enableContextualStrings") ||
+            key.hasPrefix("enableSmartSpacing") ||
+            key.hasPrefix("enableSmartCapitalization")
         }
     }
     
@@ -234,6 +313,10 @@ class PreferencesManager {
             UserDefaults.standard.set(value, forKey: key)
         }
         UserDefaults.standard.synchronize()
+        
+        // Log imported settings
+        print("🔧 Preferences imported")
+        logCurrentSmartTextSettings()
         
         // Notify all preferences changed
         DispatchQueue.main.async {

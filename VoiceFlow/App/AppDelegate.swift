@@ -63,6 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         initializeArchitecture()
         requestRequiredPermissions()
+        logSmartTextPreferences()
         logApplicationReady()
     }
     
@@ -91,6 +92,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         connectSmartTextCoordinator()
         
         print("🏗️ MantaScribe: Clean architecture initialized with \(componentManager.componentCount) components + voice commands + performance testing")
+    }
+    
+    private func logSmartTextPreferences() {
+        // Log the current SmartText preferences at startup
+        PreferencesManager.shared.logCurrentSmartTextSettings()
     }
     
     private func connectSmartTextCoordinator() {

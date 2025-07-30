@@ -1,7 +1,7 @@
 import Cocoa
 import Foundation
 
-/// Manages the menu bar interface with Fast/Smart mode toggle support
+/// Manages the menu bar interface for dictation controls and settings
 /// Provides a clean interface for all UI-related functionality
 class MenuBarController: NSObject {
     
@@ -23,12 +23,18 @@ class MenuBarController: NSObject {
     private weak var appTargetManager: AppTargetManager?
     private weak var vocabularyManager: VocabularyManager?
     
+    // Preferences window controller
+    private var preferencesWindowController: PreferencesWindowController!
+    
     // MARK: - Initialization
     
     init(appTargetManager: AppTargetManager, vocabularyManager: VocabularyManager) {
         self.appTargetManager = appTargetManager
         self.vocabularyManager = vocabularyManager
         super.init()
+        
+        // Initialize preferences window controller (use shared instance)
+        self.preferencesWindowController = PreferencesWindowController.shared
     }
     
     deinit {
@@ -66,7 +72,6 @@ class MenuBarController: NSObject {
         
         updateTargetAppMenu()
         updateVocabularyMenu()
-        updatePerformanceModeMenu()
         print("🖥️ MenuBarController: Menu refreshed")
     }
     
@@ -82,10 +87,6 @@ class MenuBarController: NSObject {
         
         // Main dictation toggle
         menu.addItem(NSMenuItem(title: "Toggle Dictation (Right Option)", action: #selector(toggleDictation), keyEquivalent: ""))
-        menu.addItem(NSMenuItem.separator())
-        
-        // Performance mode toggle
-        setupPerformanceModeMenu(in: menu)
         menu.addItem(NSMenuItem.separator())
         
         // Target app submenu
@@ -112,30 +113,6 @@ class MenuBarController: NSObject {
         for item in menu.items {
             item.target = self
         }
-    }
-    
-    private func setupPerformanceModeMenu(in menu: NSMenu) {
-        let performanceMenu = NSMenu()
-        
-        let smartModeItem = NSMenuItem(title: "Smart Mode (Full Features)", action: #selector(selectSmartMode), keyEquivalent: "")
-        smartModeItem.target = self
-        smartModeItem.state = .on // Default to Smart Mode
-        performanceMenu.addItem(smartModeItem)
-        
-        let fastModeItem = NSMenuItem(title: "Fast Mode (Performance Optimized)", action: #selector(selectFastMode), keyEquivalent: "")
-        fastModeItem.target = self
-        fastModeItem.state = .off
-        performanceMenu.addItem(fastModeItem)
-        
-        performanceMenu.addItem(NSMenuItem.separator())
-        
-        let infoItem = NSMenuItem(title: "Fast Mode disables smart text processing", action: nil, keyEquivalent: "")
-        infoItem.isEnabled = false
-        performanceMenu.addItem(infoItem)
-        
-        let performanceMenuItem = NSMenuItem(title: "Performance Mode", action: nil, keyEquivalent: "")
-        performanceMenuItem.submenu = performanceMenu
-        menu.addItem(performanceMenuItem)
     }
     
     private func setupTargetAppSubmenu(in menu: NSMenu) {
@@ -248,21 +225,6 @@ class MenuBarController: NSObject {
         }
     }
     
-    private func updatePerformanceModeMenu() {
-        guard let performanceMenuItem = findPerformanceModeMenuItem(),
-              let performanceMenu = performanceMenuItem.submenu else { return }
-        
-        let isSmartMode = delegate?.menuBarControllerCurrentPerformanceMode(self) ?? true
-        
-        for item in performanceMenu.items {
-            if item.action == #selector(selectSmartMode) {
-                item.state = isSmartMode ? .on : .off
-            } else if item.action == #selector(selectFastMode) {
-                item.state = isSmartMode ? .off : .on
-            }
-        }
-    }
-    
     private func findTargetAppMenuItem() -> NSMenuItem? {
         guard let menu = statusBarItem.menu else { return nil }
         
@@ -279,17 +241,6 @@ class MenuBarController: NSObject {
         
         for item in menu.items {
             if item.title == "Medical Vocabulary" {
-                return item
-            }
-        }
-        return nil
-    }
-    
-    private func findPerformanceModeMenuItem() -> NSMenuItem? {
-        guard let menu = statusBarItem.menu else { return nil }
-        
-        for item in menu.items {
-            if item.title == "Performance Mode" {
                 return item
             }
         }
@@ -323,16 +274,6 @@ class MenuBarController: NSObject {
         delegate?.menuBarControllerDidRequestToggleDictation(self)
     }
     
-    @objc private func selectSmartMode() {
-        delegate?.menuBarControllerDidRequestTogglePerformanceMode(self)
-        updatePerformanceModeMenu()
-    }
-    
-    @objc private func selectFastMode() {
-        delegate?.menuBarControllerDidRequestTogglePerformanceMode(self)
-        updatePerformanceModeMenu()
-    }
-    
     @objc private func selectTargetApp(_ sender: NSMenuItem) {
         guard let targetApp = sender.representedObject as? AppTargetManager.TargetApp else { return }
         
@@ -354,13 +295,8 @@ class MenuBarController: NSObject {
     }
     
     @objc private func showPreferences() {
-        // Placeholder for preferences - functionality to be added
-        let alert = NSAlert()
-        alert.messageText = "Preferences"
-        alert.informativeText = "Preferences window coming soon!"
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-        print("🔧 MenuBarController: Preferences requested")
+        preferencesWindowController.showPreferences()
+        print("🔧 MenuBarController: Preferences window opened")
     }
     
     @objc private func showAbout() {
@@ -369,25 +305,19 @@ class MenuBarController: NSObject {
         
         let contextualCount = vocabularyManager.getContextualStrings().count
         let enabledCategories = vocabularyManager.getEnabledContextualCategories().count
-        let isSmartMode = delegate?.menuBarControllerCurrentPerformanceMode(self) ?? true
-        let performanceMode = isSmartMode ? "Smart Mode (Full Features)" : "Fast Mode (Performance Optimized)"
         
         let alert = NSAlert()
         alert.messageText = "MantaScribe Pro"
         alert.informativeText = """
         Professional medical dictation with enhanced speech recognition.
         
-        ⚡ Performance Mode: \(performanceMode)
         🎯 Enhanced Recognition: \(contextualCount) medical terms available
         📚 Active Categories: \(enabledCategories) medical specialties
         🎤 Background Operation: Works while other apps have focus
-        💬 Smart Processing: \(isSmartMode ? "Enabled" : "Disabled for speed")
+        💬 Smart Processing: Context-aware capitalization and spacing
         🏥 Multi-App Support: TextEdit, Pages, Notes, Word
         
         Target App: \(appTargetManager.selectedTargetApp.displayName)
-        
-        Fast Mode: Optimized for maximum speed with basic dictation
-        Smart Mode: Full features with intelligent text processing
         
         Created for medical professionals, analysts, and researchers.
         """
@@ -459,12 +389,6 @@ class MenuBarController: NSObject {
 protocol MenuBarControllerDelegate: AnyObject {
     /// Called when user requests to toggle dictation
     func menuBarControllerDidRequestToggleDictation(_ controller: MenuBarController)
-    
-    /// Called when user requests to toggle performance mode
-    func menuBarControllerDidRequestTogglePerformanceMode(_ controller: MenuBarController)
-    
-    /// Called to get current performance mode state
-    func menuBarControllerCurrentPerformanceMode(_ controller: MenuBarController) -> Bool
     
     /// Called when user selects a target app
     func menuBarController(_ controller: MenuBarController, didSelectTargetApp app: AppTargetManager.TargetApp)
