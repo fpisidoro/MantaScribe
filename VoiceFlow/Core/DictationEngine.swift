@@ -10,7 +10,6 @@ class DictationEngine: NSObject {
     enum DictationState {
         case idle
         case ready
-        case warming         // NEW: Audio engine warm-up state
         case listening
         case processing
         case error
@@ -31,7 +30,6 @@ class DictationEngine: NSObject {
         case audioEngineFailure(Error)
         case recognitionRequestCreationFailed
         case recognitionTaskFailed(Error)
-        case audioEngineWarmupFailed(Error)  // NEW
     }
     
     // MARK: - Properties
@@ -62,25 +60,9 @@ class DictationEngine: NSObject {
     private var isWaitingForPushToTalkResults = false
     private var pushToTalkTimeoutTimer: Timer?
     
-    // NEW: Speech Recognition Pre-warming System
-    private var isSpeechRecognitionWarmedUp = false
-    private var speechRecognitionWarmupAttempts = 0
-    private var maxSpeechRecognitionWarmupAttempts = 2
-    private var speechRecognitionWarmupTimer: Timer?
-    private var pendingSpeechRecognitionRequest = false
-    
-    // NEW: Speech Recognition Task Management
-    private var recognitionTaskRetryCount = 0
-    private var maxRecognitionTaskRetries = 2
-    private var recognitionTaskRetryTimer: Timer?
-    
-    // MARK: - NEW: Audio Engine Warm-up System
-    private var isAudioEngineWarmedUp = false
-    private var warmupAttempts = 0
-    private var maxWarmupAttempts = 3
-    private var isPerformingWarmup = false
-    private var pendingStartRequest = false        // Track if user requested start during warmup
-    private var autoRetryTimer: Timer?
+    // Simple Queue System
+    private var hasPendingDictationRequest = false
+    private var isSystemWarming = false
     private var warmupTimer: Timer?
     
     // State
@@ -95,8 +77,7 @@ class DictationEngine: NSObject {
     // Configuration
     private let bufferSize: AVAudioFrameCount = 1024
     private let pushToTalkTimeout: TimeInterval = 3.0  // Max wait for results after key release
-    private let warmupDelay: TimeInterval = 1.0        // NEW: Delay before warmup retry
-    private let autoRetryDelay: TimeInterval = 0.5     // NEW: Delay before auto-retry
+    private let systemWarmupTimeout: TimeInterval = 2.0  // Max time to wait for system warmup
     
     // MARK: - Initialization
     
@@ -104,213 +85,119 @@ class DictationEngine: NSObject {
         super.init()
         setupSpeechRecognizer()
         setState(.ready)
-        
-        // Start both audio engine and speech recognition warm-up
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.performAudioEngineWarmup()
-            self.performSpeechRecognitionWarmup()
-        }
-        
-        print("🎤 DictationEngine: Initialized - bulletproof reliability mode")
+        print("🎤 DictationEngine: Initialized with simple queue system")
     }
     
-    // MARK: - NEW: Audio Engine Warm-up System
+    // MARK: - System Readiness Check
     
-    private func performAudioEngineWarmup() {
-        guard !isAudioEngineWarmedUp && !isPerformingWarmup else { return }
-        
-        warmupAttempts += 1
-        isPerformingWarmup = true
-        setState(.warming)
-        
-        print("🔥 Audio Engine Warm-up: Attempt \(warmupAttempts)/\(maxWarmupAttempts)")
-        
-        // Perform warm-up in background to avoid blocking UI
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.executeWarmupSequence()
+    private func isSystemReady() -> Bool {
+        // Quick readiness check
+        guard let speechRecognizer = speechRecognizer,
+              speechRecognizer.isAvailable else {
+            print("⚠️ Speech recognizer not available")
+            return false
         }
-    }
-    
-    private func executeWarmupSequence() {
+        
+        // Try creating a recognition request - this will fail fast if system is cold
         do {
-            // Test audio engine initialization and startup
-            try self.testAudioEngineInitialization()
+            let testRequest = SFSpeechAudioBufferRecognitionRequest()
+            testRequest.shouldReportPartialResults = false
+            // If we can create it successfully, system is likely ready
+            print("✅ System readiness check passed")
+            return true
+        } catch {
+            print("⚠️ System readiness check failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+    
+    private func queueDictationAndWarmup() {
+        guard !isSystemWarming else {
+            print("🔄 Already warming system - request already queued")
+            return
+        }
+        
+        print("🔄 Queuing dictation request and warming system...")
+        hasPendingDictationRequest = true
+        isSystemWarming = true
+        
+        // Start background warmup
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.performSystemWarmup()
+        }
+        
+        // Safety timeout in case warmup hangs
+        warmupTimer = Timer.scheduledTimer(withTimeInterval: systemWarmupTimeout, repeats: false) { [weak self] _ in
+            self?.handleWarmupTimeout()
+        }
+    }
+    
+    private func performSystemWarmup() {
+        do {
+            // Test audio engine initialization
+            let testEngine = AVAudioEngine()
+            let inputNode = testEngine.inputNode
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
             
-            // Success - mark as warmed up
+            // Brief test to wake up the system
+            inputNode.installTap(onBus: 0, bufferSize: 512, format: recordingFormat) { _, _ in }
+            testEngine.prepare()
+            try testEngine.start()
+            
+            // Small delay to ensure system is stable
+            Thread.sleep(forTimeInterval: 0.2)
+            
+            // Cleanup
+            testEngine.stop()
+            inputNode.removeTap(onBus: 0)
+            
+            // Test speech recognition
+            let testRequest = SFSpeechAudioBufferRecognitionRequest()
+            testRequest.shouldReportPartialResults = false
+            
             DispatchQueue.main.async {
                 self.handleWarmupSuccess()
             }
             
         } catch {
-            print("⚠️ Warm-up attempt \(warmupAttempts) failed: \(error.localizedDescription)")
-            
             DispatchQueue.main.async {
                 self.handleWarmupFailure(error)
             }
         }
     }
     
-    private func testAudioEngineInitialization() throws {
-        // Create a temporary audio engine for testing
-        let testEngine = AVAudioEngine()
-        let inputNode = testEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        
-        // Install a test tap (will be removed immediately)
-        inputNode.installTap(onBus: 0, bufferSize: 512, format: recordingFormat) { _, _ in
-            // Do nothing - just testing initialization
-        }
-        
-        testEngine.prepare()
-        
-        // Try to start the engine
-        try testEngine.start()
-        
-        // Brief moment to ensure it's stable
-        Thread.sleep(forTimeInterval: 0.1)
-        
-        // Clean up
-        testEngine.stop()
-        inputNode.removeTap(onBus: 0)
-        
-        print("🔥 Audio engine test successful")
-    }
-    
     private func handleWarmupSuccess() {
-        isAudioEngineWarmedUp = true
-        isPerformingWarmup = false
-        setState(.ready)
+        print("✅ System warmup completed successfully")
+        isSystemWarming = false
+        warmupTimer?.invalidate()
+        warmupTimer = nil
         
-        print("🔥 ✅ Audio Engine Warm-up: SUCCESS after \(warmupAttempts) attempts")
-        
-        // If user tried to start during warmup, start now
-        if pendingStartRequest {
-            pendingStartRequest = false
-            print("🔥 Executing pending start request")
+        // Execute queued request if any
+        if hasPendingDictationRequest {
+            hasPendingDictationRequest = false
+            print("🚀 Executing queued dictation request")
             startDictation()
-        }
-    }
-    
-    // MARK: - NEW: Speech Recognition Warm-up System
-    
-    private func performSpeechRecognitionWarmup() {
-        guard !isSpeechRecognitionWarmedUp && speechRecognitionWarmupAttempts < maxSpeechRecognitionWarmupAttempts else { return }
-        
-        speechRecognitionWarmupAttempts += 1
-        
-        print("🧾 Speech Recognition Warm-up: Attempt \(speechRecognitionWarmupAttempts)/\(maxSpeechRecognitionWarmupAttempts)")
-        
-        // Perform speech recognition warm-up in background
-        DispatchQueue.global(qos: .utility).async {
-            self.executeSpeechRecognitionWarmup()
-        }
-    }
-    
-    private func executeSpeechRecognitionWarmup() {
-        do {
-            // Create a test recognition request to warm up the speech recognition system
-            let warmupRequest = SFSpeechAudioBufferRecognitionRequest()
-            warmupRequest.shouldReportPartialResults = false
-            
-            // Test speech recognizer availability and create a minimal task
-            guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-                throw DictationError.speechRecognizerUnavailable
-            }
-            
-            // Create a brief test recognition task to initialize the system
-            let warmupTask = speechRecognizer.recognitionTask(with: warmupRequest) { [weak self] result, error in
-                DispatchQueue.main.async {
-                    self?.handleSpeechRecognitionWarmupResult(result: result, error: error)
-                }
-            }
-            
-            // End the test task quickly - we just want to initialize the system
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                warmupRequest.endAudio()
-                warmupTask.cancel()
-            }
-            
-            print("🧾 Speech recognition warm-up task created")
-            
-        } catch {
-            DispatchQueue.main.async {
-                self.handleSpeechRecognitionWarmupFailure(error)
-            }
-        }
-    }
-    
-    private func handleSpeechRecognitionWarmupResult(result: SFSpeechRecognitionResult?, error: Error?) {
-        // Don't care about the actual result - we just want to warm up the system
-        if error == nil {
-            handleSpeechRecognitionWarmupSuccess()
-        } else {
-            handleSpeechRecognitionWarmupFailure(error!)
-        }
-    }
-    
-    private func handleSpeechRecognitionWarmupSuccess() {
-        isSpeechRecognitionWarmedUp = true
-        print("🧾 ✅ Speech Recognition Warm-up: SUCCESS after \(speechRecognitionWarmupAttempts) attempts")
-        
-        // If user tried to start during warmup, start now
-        if pendingSpeechRecognitionRequest {
-            pendingSpeechRecognitionRequest = false
-            print("🧾 Executing pending speech recognition request")
-            startDictation()
-        }
-    }
-    
-    private func handleSpeechRecognitionWarmupFailure(_ error: Error) {
-        if speechRecognitionWarmupAttempts < maxSpeechRecognitionWarmupAttempts {
-            print("🧾 Speech recognition warm-up failed, retrying in 1s...")
-            
-            speechRecognitionWarmupTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
-                self.performSpeechRecognitionWarmup()
-            }
-        } else {
-            print("🧾 ❌ Speech Recognition Warm-up: FAILED after \(maxSpeechRecognitionWarmupAttempts) attempts")
-            isSpeechRecognitionWarmedUp = true  // Allow normal operation anyway
         }
     }
     
     private func handleWarmupFailure(_ error: Error) {
-        isPerformingWarmup = false
+        print("❌ System warmup failed: \(error.localizedDescription)")
+        isSystemWarming = false
+        warmupTimer?.invalidate()
+        warmupTimer = nil
         
-        if warmupAttempts < maxWarmupAttempts {
-            print("🔥 Warm-up failed, retrying in \(warmupDelay)s...")
-            
-            warmupTimer = Timer.scheduledTimer(withTimeInterval: warmupDelay, repeats: false) { _ in
-                self.performAudioEngineWarmup()
-            }
-        } else {
-            print("🔥 ❌ Audio Engine Warm-up: FAILED after \(maxWarmupAttempts) attempts")
-            setState(.ready)  // Continue anyway, will rely on auto-retry
+        // Try to execute the queued request anyway - might work now
+        if hasPendingDictationRequest {
+            hasPendingDictationRequest = false
+            print("🤷‍♂️ Attempting queued dictation despite warmup failure")
+            startDictation()
         }
     }
     
-    private func shouldAttemptAutoRetry(for error: Error) -> Bool {
-        // Auto-retry for audio engine failures during first few attempts
-        let errorDescription = error.localizedDescription.lowercased()
-        let isAudioError = errorDescription.contains("audio") || 
-                          errorDescription.contains("10877") ||
-                          errorDescription.contains("engine")
-        
-        return isAudioError && !isAudioEngineWarmedUp
-    }
-    
-    private func scheduleAutoRetry() {
-        print("🔄 Scheduling auto-retry in \(autoRetryDelay)s...")
-        
-        autoRetryTimer = Timer.scheduledTimer(withTimeInterval: autoRetryDelay, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            
-            print("🔄 Executing auto-retry...")
-            self.autoRetryTimer = nil
-            
-            // Try once more, but mark as warmed up to prevent infinite retries
-            self.isAudioEngineWarmedUp = true
-            self.startDictation()
-        }
+    private func handleWarmupTimeout() {
+        print("⏰ System warmup timed out - proceeding anyway")
+        warmupTimer = nil
+        handleWarmupSuccess()  // Treat timeout as success and try anyway
     }
     
     // MARK: - Public Interface
@@ -334,33 +221,18 @@ class DictationEngine: NSObject {
         self.smartTextCoordinator = coordinator
     }
     
-    /// Start dictation - BULLETPROOF VERSION with Speech Recognition Pre-warming
+    /// Start dictation - Simple try-first approach
     func startDictation() {
         print("🎤 ═══ START DICTATION REQUEST ═══")
         print("🎤 Current state: \(state), isActivelyRecording: \(isActivelyRecording)")
-        print("🎤 Audio warm-up: \(isAudioEngineWarmedUp), Speech warm-up: \(isSpeechRecognitionWarmedUp)")
         
         // Clear stop flag - user wants to start
         userRequestedStop = false
         
-        // If audio engine is warming up, queue the request
-        if isPerformingWarmup {
-            print("🔥 Audio engine warming up - queuing start request")
-            pendingStartRequest = true
-            return
-        }
-        
-        // If speech recognition is warming up, queue the request
-        if !isSpeechRecognitionWarmedUp {
-            print("🧾 Speech recognition warming up - queuing start request")
-            pendingSpeechRecognitionRequest = true
-            return
-        }
-        
-        // Validate prerequisites
-        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("❌ Speech recognizer not available")
-            handleError(DictationError.speechRecognizerUnavailable)
+        // If already warming, just update the queue
+        if isSystemWarming {
+            print("🔄 System warming - ensuring request is queued")
+            hasPendingDictationRequest = true
             return
         }
         
@@ -368,6 +240,16 @@ class DictationEngine: NSObject {
             print("🎤 Already recording - ignoring duplicate start request")
             return
         }
+        
+        // Quick system readiness check
+        if !isSystemReady() {
+            print("⚠️ System not ready - queuing request and warming up")
+            queueDictationAndWarmup()
+            return
+        }
+        
+        // System is ready - try to start immediately
+        print("✅ System ready - starting dictation immediately")
         
         // Reset state for fresh start
         resetSession()
@@ -379,12 +261,9 @@ class DictationEngine: NSObject {
         } catch {
             print("❌ Failed to start dictation: \(error)")
             
-            // Check if we should auto-retry
-            if shouldAttemptAutoRetry(for: error) {
-                handleStartFailureWithRetry(error)
-            } else {
-                handleStartFailure(error)
-            }
+            // If immediate start failed, try queuing and warming
+            print("🔄 Immediate start failed - falling back to queue and warmup")
+            queueDictationAndWarmup()
         }
     }
     
@@ -425,11 +304,7 @@ class DictationEngine: NSObject {
     }
     
     var isReady: Bool {
-        return state == .ready && !isActivelyRecording && !isPerformingWarmup
-    }
-    
-    var isSystemReady: Bool {
-        return isAudioEngineWarmedUp && isSpeechRecognitionWarmedUp && isReady
+        return state == .ready && !isActivelyRecording && !isSystemWarming
     }
     
     // MARK: - Private Implementation
@@ -454,19 +329,12 @@ class DictationEngine: NSObject {
         // Cancel timers
         pushToTalkTimeoutTimer?.invalidate()
         pushToTalkTimeoutTimer = nil
-        autoRetryTimer?.invalidate()
-        autoRetryTimer = nil
         warmupTimer?.invalidate()
         warmupTimer = nil
-        recognitionTaskRetryTimer?.invalidate()
-        recognitionTaskRetryTimer = nil
-        speechRecognitionWarmupTimer?.invalidate()
-        speechRecognitionWarmupTimer = nil
         
         // Clear pending requests
-        pendingStartRequest = false
-        pendingSpeechRecognitionRequest = false
-        recognitionTaskRetryCount = 0
+        hasPendingDictationRequest = false
+        isSystemWarming = false
     }
     
     private func performStart() throws {
@@ -488,12 +356,6 @@ class DictationEngine: NSObject {
         // Mark as actively recording
         isActivelyRecording = true
         hasReceivedAnyResults = false
-        
-        // Mark system as warmed up on successful start
-        if !isAudioEngineWarmedUp {
-            isAudioEngineWarmedUp = true
-            print("🔥 Audio engine marked as warmed up after successful start")
-        }
         
         // Notify delegate
         delegate?.dictationEngineDidStart(self)
@@ -740,26 +602,7 @@ class DictationEngine: NSObject {
         delegate?.dictationEngine(self, didEncounterError: error)
     }
     
-    private func handleStartFailure(_ error: Error) {
-        setState(.error)
-        
-        let dictationError: DictationError
-        if let existing = error as? DictationError {
-            dictationError = existing
-        } else {
-            dictationError = DictationError.recognitionTaskFailed(error)
-        }
-        
-        delegate?.dictationEngine(self, didEncounterError: dictationError)
-    }
-    
-    private func handleStartFailureWithRetry(_ error: Error) {
-        print("🔄 Start failed, but will auto-retry: \(error.localizedDescription)")
-        
-        // Don't immediately show error to user - try auto-retry first
-        setState(.ready)
-        scheduleAutoRetry()
-    }
+
     
     // MARK: - Clean Shutdown
     
