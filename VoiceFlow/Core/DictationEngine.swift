@@ -83,6 +83,8 @@ class DictationEngine: NSObject {
         setupSpeechRecognizer()
         setState(.ready)
         
+        // 🎉 BREAKTHROUGH: This microphone warm-up SOLVED the first-press issue!
+        // After months of complex attempts, simple warm-up was the answer.
         // Warm up microphone on app launch
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.warmUpMicrophone()
