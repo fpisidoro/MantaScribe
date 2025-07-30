@@ -85,10 +85,45 @@ class DictationEngine: NSObject {
         super.init()
         setupSpeechRecognizer()
         setState(.ready)
+        
+        // Early initialization to prevent cold starts
+        DispatchQueue.global(qos: .utility).async {
+            self.preInitializeAudioSystem()
+        }
+        
         print("🎤 DictationEngine: Initialized with simple queue system")
     }
     
     // MARK: - System Warmup
+    
+    private func preInitializeAudioSystem() {
+        print("🔥 Pre-initializing audio system to prevent cold starts...")
+        
+        // Create temporary engine for initialization
+        let tempEngine = AVAudioEngine()
+        
+        do {
+            // Force initialization of critical nodes
+            _ = tempEngine.outputNode
+            _ = tempEngine.mainMixerNode
+            _ = tempEngine.inputNode
+            
+            // Prepare and briefly start to fully initialize system
+            tempEngine.prepare()
+            try tempEngine.start()
+            
+            // Brief operation to ensure system is active
+            Thread.sleep(forTimeInterval: 0.1)
+            
+            // Clean shutdown
+            tempEngine.stop()
+            
+            print("🔥 ✅ Audio system pre-initialization completed successfully")
+        } catch {
+            print("🔥 ⚠️ Audio system pre-initialization failed: \(error.localizedDescription)")
+            // Not critical - main engine will handle initialization
+        }
+    }
     
     private func queueDictationAndWarmup() {
         guard !isSystemWarming else {
@@ -374,17 +409,23 @@ class DictationEngine: NSObject {
             audioEngine.inputNode.removeTap(onBus: 0)
         }
         
+        // CRITICAL: Force initialization of the audio chain before configuration
+        // This triggers internal macOS audio system initialization
+        _ = audioEngine.outputNode     // Force output node initialization
+        _ = audioEngine.mainMixerNode  // Force mixer initialization
+        
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        // Install audio tap
+        // Install audio tap AFTER accessing nodes
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
         
+        // Call prepare() before start() - critical for resource allocation
         audioEngine.prepare()
-        print("🎤 Audio engine configured")
+        print("🎤 Audio engine configured with node pre-initialization")
     }
     
     private func startAudioEngine() throws {
@@ -395,12 +436,35 @@ class DictationEngine: NSObject {
             // Check if this is the common cold-start error
             let nsError = error as NSError
             if nsError.code == -10877 {
-                print("⚠️ Audio engine cold start detected (-10877) - system needs warmup")
-                throw DictationError.audioEngineFailure(error)
+                print("⚠️ Audio engine cold start detected (-10877) - attempting recovery")
+                try handleColdStartRecovery()
             } else {
                 print("❌ Audio engine failed with: \(error.localizedDescription)")
                 throw DictationError.audioEngineFailure(error)
             }
+        }
+    }
+    
+    private func handleColdStartRecovery() throws {
+        print("🔄 Performing cold start recovery sequence...")
+        
+        // Full reset sequence
+        audioEngine.stop()
+        audioEngine.reset()  // Clear all connections
+        
+        // Small delay for system cleanup
+        Thread.sleep(forTimeInterval: 0.1)
+        
+        // Reinitialize with proper node sequence
+        try setupAudioEngine()
+        
+        // Second attempt
+        do {
+            try audioEngine.start()
+            print("🔄 ✅ Cold start recovery successful")
+        } catch {
+            print("🔄 ❌ Cold start recovery failed")
+            throw DictationError.audioEngineFailure(error)
         }
     }
     
