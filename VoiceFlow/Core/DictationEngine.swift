@@ -247,12 +247,28 @@ class DictationEngine: NSObject {
             print("⚠️ Microphone permission: Unknown status")
         }
         
-        // Additional verification: Check if we can access audio input devices
-        let inputDevices = AVAudioSession.sharedInstance().availableInputs
-        if inputDevices?.isEmpty ?? true {
-            print("⚠️ No audio input devices available")
+        // Additional verification: Check if we can access audio input devices using Core Audio
+        var deviceCount: UInt32 = 0
+        var deviceCountSize = UInt32(MemoryLayout<UInt32>.size)
+        var deviceCountAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        let getDeviceCountResult = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &deviceCountAddress,
+            0,
+            nil,
+            &deviceCountSize
+        )
+        
+        if getDeviceCountResult == noErr {
+            let deviceArraySize = Int(deviceCountSize / UInt32(MemoryLayout<AudioDeviceID>.size))
+            print("✅ Audio devices available: \(deviceArraySize)")
         } else {
-            print("✅ Audio input devices available: \(inputDevices?.count ?? 0)")
+            print("⚠️ Could not get audio device count: \(getDeviceCountResult)")
         }
     }
     
