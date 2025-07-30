@@ -413,14 +413,7 @@ class DictationEngine: NSObject {
         
         recognitionRequest.shouldReportPartialResults = true
         
-        // CRITICAL FIX: Force server-based recognition for reliability
-        // Do NOT use on-device processing for first-time reliability
-        if #available(macOS 13.0, *) {
-            recognitionRequest.requiresOnDeviceRecognition = false
-            print("🎤 Explicitly disabled on-device recognition for maximum server reliability")
-        }
-        
-        // NO on-device recognition - use server for reliability
+        // SIMPLE APPROACH: Just use server-based recognition without forcing specific settings
         print("🎤 Using server-based recognition for maximum reliability")
         
         // Apply contextual strings for medical vocabulary (only in smart mode)
@@ -430,12 +423,6 @@ class DictationEngine: NSObject {
                 recognitionRequest.contextualStrings = contextualStrings
                 print("🎯 Applied \(contextualStrings.count) medical terms")
             }
-        }
-        
-        // CRITICAL: Add task options for better reliability
-        if #available(macOS 12.0, *) {
-            recognitionRequest.taskHint = .dictation
-            print("🎤 Set task hint to dictation for optimized processing")
         }
     }
     
@@ -496,35 +483,27 @@ class DictationEngine: NSObject {
             return
         }
         
-        print("🔄 Recognition task health check: No results received after 2s, attempting restart...")
+        print("🔄 Recognition task health check: No results received after 2s")
         
-        // Restart recognition task immediately for all modes if no results
-        if recognitionTaskRetryCount < maxRecognitionTaskRetries {
-            print("🔄 Restarting recognition task for better reliability (attempt \(recognitionTaskRetryCount + 1))")
+        // Only try one restart to avoid overwhelming the system
+        if recognitionTaskRetryCount == 0 {
+            print("🔄 Attempting single recognition task restart...")
             restartRecognitionTask()
         } else {
-            print("⚠️ Recognition task max retries reached - may need manual retry")
+            print("⚠️ Recognition task already restarted - allowing normal operation")
         }
     }
     
     private func restartRecognitionTask() {
         recognitionTaskRetryCount += 1
         
-        print("🔄 Restarting recognition task (retry \(recognitionTaskRetryCount)/\(maxRecognitionTaskRetries))")
+        print("🔄 Performing simple recognition task restart")
         
-        // Clean up current task
+        // Clean up current task only
         recognitionTask?.cancel()
         recognitionTask = nil
         
-        // Recreate recognition request for clean restart
-        do {
-            try setupRecognitionRequest()
-        } catch {
-            print("❌ Failed to recreate recognition request: \(error)")
-            return
-        }
-        
-        // Restart with fresh request
+        // Restart with existing request (don't recreate to avoid conflicts)
         if let speechRecognizer = speechRecognizer,
            let recognitionRequest = recognitionRequest {
             
@@ -532,14 +511,7 @@ class DictationEngine: NSObject {
                 self?.handleRecognitionCallback(result: result, error: error)
             }
             
-            print("🔄 ✅ Recognition task restarted with fresh request")
-            
-            // Set up monitoring for this retry attempt
-            if recognitionTaskRetryCount < maxRecognitionTaskRetries {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    self.monitorRecognitionTaskHealth()
-                }
-            }
+            print("🔄 ✅ Recognition task restarted (simple restart)")
         }
     }
     
