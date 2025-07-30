@@ -16,7 +16,7 @@ class PreferencesWindowController: NSWindowController {
         
         // Create the window with proper Mac preferences styling
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -29,8 +29,8 @@ class PreferencesWindowController: NSWindowController {
         window.center()
         
         // Set minimum and maximum size (fixed for now, expandable later for tabs)
-        window.minSize = NSSize(width: 480, height: 360)
-        window.maxSize = NSSize(width: 480, height: 360)
+        window.minSize = NSSize(width: 480, height: 500)
+        window.maxSize = NSSize(width: 480, height: 500)
         
         // Initialize with the window
         self.init(window: window)

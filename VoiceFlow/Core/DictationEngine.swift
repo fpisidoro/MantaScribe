@@ -287,13 +287,15 @@ class DictationEngine: NSObject {
         
         recognitionRequest.shouldReportPartialResults = true
         
-        // Apply contextual strings for medical vocabulary (only in smart mode)
-        if processingMode == .smart {
+        // Apply contextual strings for medical vocabulary (check both smart mode AND preference)
+        if processingMode == .smart && PreferencesManager.shared.enableContextualStrings {
             let contextualStrings = VocabularyManager.shared.getContextualStrings()
             if !contextualStrings.isEmpty {
                 recognitionRequest.contextualStrings = contextualStrings
-                print("🎯 Applied \(contextualStrings.count) medical terms")
+                print("🎯 Applied \(contextualStrings.count) medical terms (contextual strings enabled)")
             }
+        } else {
+            print("🎯 Contextual strings bypassed (smart mode: \(processingMode == .smart), preference: \(PreferencesManager.shared.enableContextualStrings))")
         }
         
         print("🎤 Speech recognition request configured with Core Audio input")

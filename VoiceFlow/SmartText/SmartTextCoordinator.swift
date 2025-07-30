@@ -21,24 +21,31 @@ import Cocoa
 /// Now uses real CursorDetector, CapitalizationEngine, and SpacingEngine for production-grade intelligence
 class SmartTextCoordinator {
     
-    // MARK: - Smart Features Configuration
-    // Re-enabled for Smart Completion Detection integration
+    // MARK: - Smart Features Configuration (Now from Preferences)
     
     /// Step 1: Basic vocabulary corrections (string processing only)
     /// Expected impact: Minimal (just dictionary lookups)
-    var enableLegacyVocabulary = true  // ✅ RE-ENABLED
+    private var enableLegacyVocabulary: Bool {
+        return PreferencesManager.shared.enableLegacyVocabulary
+    }
     
     /// Step 2: Enhanced speech recognition (handled by Apple's engine)
     /// Expected impact: None (processed during speech recognition)
-    var enableContextualStrings = true  // ✅ ENABLED (was already on)
+    private var enableContextualStrings: Bool {
+        return PreferencesManager.shared.enableContextualStrings
+    }
     
     /// Step 3: Intelligent spacing decisions (requires cursor detection)
     /// Expected impact: Medium (app switching + cursor analysis)
-    var enableSmartSpacing = true  // ✅ RE-ENABLED
+    private var enableSmartSpacing: Bool {
+        return PreferencesManager.shared.enableSmartSpacing
+    }
     
     /// Step 4: Context-aware capitalization (requires cursor detection)
     /// Expected impact: High (app switching + text selection + cursor manipulation)
-    var enableSmartCapitalization = true  // ✅ RE-ENABLED
+    private var enableSmartCapitalization: Bool {
+        return PreferencesManager.shared.enableSmartCapitalization
+    }
     
     // MARK: - Real Smart Feature Engines
     
@@ -54,7 +61,38 @@ class SmartTextCoordinator {
         self.spacingEngine = SpacingEngine()
         self.capitalizationEngine = CapitalizationEngine()
         
+        // Log initial configuration
         printCurrentConfiguration()
+        
+        // Listen for preference changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(preferencesDidChange(_:)),
+            name: PreferencesManager.preferenceDidChangeNotification,
+            object: nil
+        )
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    // MARK: - Preference Change Handling
+    
+    @objc private func preferencesDidChange(_ notification: Notification) {
+        // Check if any of our smart text preferences changed
+        guard let userInfo = notification.userInfo,
+              let key = userInfo["key"] as? PreferencesManager.PreferenceKey else {
+            return
+        }
+        
+        switch key {
+        case .enableLegacyVocabulary, .enableContextualStrings, .enableSmartSpacing, .enableSmartCapitalization:
+            print("🧠 🔧 SmartText preferences changed - updating configuration")
+            printCurrentConfiguration()
+        default:
+            break
+        }
     }
     
     // MARK: - Main Processing Pipeline (For Apple's Corrected Text)
@@ -84,6 +122,8 @@ class SmartTextCoordinator {
             if processedText != text {
                 print("🧠 ✅ Legacy vocabulary applied: '\(text)' → '\(processedText)'")
             }
+        } else {
+            print("🧠 ⚠️ Legacy vocabulary bypassed (disabled in preferences)")
         }
         
         // Step 2: Real cursor detection (for both spacing and capitalization)
@@ -114,6 +154,8 @@ class SmartTextCoordinator {
             if let original = originalApp {
                 original.activate(options: [])
             }
+        } else {
+            print("🧠 ⚠️ Cursor detection bypassed (both spacing and capitalization disabled)")
         }
         
         // Step 3: Smart spacing using real SpacingEngine
@@ -134,6 +176,8 @@ class SmartTextCoordinator {
             appliedFeatures.append("Smart Spacing (\(String(format: "%.1f", spacingTime))ms)")
             
             print("🧠 📝 Smart spacing decision: leading=\(spacingDecision.needsLeadingSpace), trailing=\(spacingDecision.needsTrailingSpace) (\(spacingDecision.reason))")
+        } else if !enableSmartSpacing {
+            print("🧠 ⚠️ Smart spacing bypassed (disabled in preferences)")
         }
         
         // Step 4: Smart capitalization using real CapitalizationEngine
@@ -163,6 +207,8 @@ class SmartTextCoordinator {
             
             let capsTime = (CFAbsoluteTimeGetCurrent() - capsStartTime) * 1000
             appliedFeatures.append("Smart Capitalization (\(String(format: "%.1f", capsTime))ms)")
+        } else if !enableSmartCapitalization {
+            print("🧠 ⚠️ Smart capitalization bypassed (disabled in preferences)")
         } else {
             print("🧠 ⚠️ Smart capitalization skipped: enabled=\(enableSmartCapitalization), detectionResult=\(cursorDetectionResult != nil)")
         }
@@ -200,7 +246,7 @@ class SmartTextCoordinator {
     private func printCurrentConfiguration() {
         print("""
         
-        🧠 SmartTextCoordinator - Real Smart Engines Integration
+        🧠 SmartTextCoordinator - Real Smart Engines Integration (Preferences-Controlled)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         📚 Legacy Vocabulary: \(enableLegacyVocabulary ? "✅ ENABLED" : "❌ DISABLED")
         🎯 Contextual Strings: \(enableContextualStrings ? "✅ ENABLED" : "❌ DISABLED")  
@@ -208,7 +254,7 @@ class SmartTextCoordinator {
         🔤 Smart Capitalization: \(enableSmartCapitalization ? "✅ ENABLED (Real CapitalizationEngine)" : "❌ DISABLED")
         🔍 Cursor Detection: \(enableSmartSpacing || enableSmartCapitalization ? "✅ ENABLED (Real CursorDetector)" : "❌ DISABLED")
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        🧠 Now using REAL smart engines for production-grade intelligence!
+        🧠 Now using REAL smart engines controlled by user preferences!
         
         """)
     }
@@ -216,8 +262,30 @@ class SmartTextCoordinator {
     /// Update configuration and reinitialize engines as needed
     func updateConfiguration() {
         printCurrentConfiguration()
-        // Real engines are always initialized, just controlled by feature flags
-        print("🧠 Real engines ready - controlled by feature flags")
+        // Real engines are always initialized, just controlled by preference flags
+        print("🧠 Real engines ready - controlled by preference flags")
+    }
+    
+    // MARK: - Public Access to Feature States (for external components)
+    
+    /// Get current legacy vocabulary setting (for other components that need this info)
+    func isLegacyVocabularyEnabled() -> Bool {
+        return enableLegacyVocabulary
+    }
+    
+    /// Get current contextual strings setting (for DictationEngine)
+    func isContextualStringsEnabled() -> Bool {
+        return enableContextualStrings
+    }
+    
+    /// Get current smart spacing setting
+    func isSmartSpacingEnabled() -> Bool {
+        return enableSmartSpacing
+    }
+    
+    /// Get current smart capitalization setting
+    func isSmartCapitalizationEnabled() -> Bool {
+        return enableSmartCapitalization
     }
     
     // MARK: - Detailed Logging for Debugging
