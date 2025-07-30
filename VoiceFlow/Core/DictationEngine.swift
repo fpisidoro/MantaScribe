@@ -27,10 +27,9 @@ class DictationEngine: NSObject {
     
     enum DictationError: Error {
         case speechRecognizerUnavailable
-        case coreAudioFailure(Error)
+        case audioEngineFailure(Error)
         case recognitionRequestCreationFailed
         case recognitionTaskFailed(Error)
-        case audioQueueCreationFailed(OSStatus)
     }
     
     // MARK: - Properties
@@ -103,14 +102,14 @@ class DictationEngine: NSObject {
         
         audioEngine = AVAudioEngine()
         guard let audioEngine = audioEngine else {
-            throw DictationError.coreAudioFailure(NSError(domain: "AudioEngine", code: -1))
+            throw DictationError.audioEngineFailure(NSError(domain: "AudioEngine", code: -1))
         }
         
         inputNode = audioEngine.inputNode
         let recordingFormat = inputNode?.outputFormat(forBus: 0)
         
         guard let format = recordingFormat else {
-            throw DictationError.coreAudioFailure(NSError(domain: "AudioFormat", code: -1))
+            throw DictationError.audioEngineFailure(NSError(domain: "AudioFormat", code: -1))
         }
         
         inputNode?.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -123,7 +122,7 @@ class DictationEngine: NSObject {
     
     private func startAudioEngine() throws {
         guard let audioEngine = audioEngine else {
-            throw DictationError.coreAudioFailure(NSError(domain: "AudioEngine", code: -1))
+            throw DictationError.audioEngineFailure(NSError(domain: "AudioEngine", code: -1))
         }
         
         print("🔊 Starting AVAudioEngine...")
@@ -169,31 +168,8 @@ class DictationEngine: NSObject {
             
         } catch {
             print("❌ Failed to start AVAudioEngine dictation: \(error)")
-            handleError(DictationError.coreAudioFailure(error))
+            handleError(DictationError.audioEngineFailure(error))
         }
-    }
-    
-    private func convertToAVAudioBuffer(coreAudioBuffer: AudioQueueBufferRef, packetCount: UInt32) -> AVAudioPCMBuffer {
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: audioFormat.mSampleRate,
-            channels: AVAudioChannelCount(audioFormat.mChannelsPerFrame),
-            interleaved: true
-        )!
-        
-        let frameLength = packetCount
-        let audioBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength)!
-        audioBuffer.frameLength = frameLength
-        
-        // Copy audio data
-        let audioData = coreAudioBuffer.pointee.mAudioData.bindMemory(to: Int16.self, capacity: Int(packetCount))
-        let bufferData = audioBuffer.int16ChannelData![0]
-        
-        for i in 0..<Int(packetCount) {
-            bufferData[i] = audioData[i]
-        }
-        
-        return audioBuffer
     }
     
     /// Warm up microphone and speech recognition service on app launch
