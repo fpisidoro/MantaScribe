@@ -123,6 +123,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ⚡ Performance: \(modeStatus)
         🎤 Voice Commands: \(commandCount) commands available
         🏗️ Architecture: Clean mode separation + performance testing
+        🔥 Audio Engine: Warming up for first-use reliability
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         Ready for professional medical dictation workflows!
         
@@ -332,6 +333,26 @@ fileprivate class ComponentManager: NSObject {
         initializeCoreComponents()
         initializeUIComponents()
         connectComponentDelegates()
+        startStatusMonitoring()
+    }
+    
+    private func startStatusMonitoring() {
+        // Monitor DictationEngine status during warm-up phase
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            
+            // Update status based on current engine state
+            self.updateStatusFromDictationEngine()
+            
+            // Stop monitoring once system is ready
+            if self.dictationEngine.isSystemReady {
+                timer.invalidate()
+                print("🔥 Status monitoring stopped - system ready")
+            }
+        }
     }
     
     private func initializeCoreComponents() {
@@ -390,9 +411,29 @@ fileprivate class ComponentManager: NSObject {
             menuBarController.updateStatus(status)
         } else {
             // Fast mode: minimal status updates
-            if status == .error {
+            if status == .error || status == .warming {
                 menuBarController.updateStatus(status)
             }
+        }
+    }
+    
+    func updateStatusFromDictationEngine() {
+        // Update status based on DictationEngine state
+        guard let engine = dictationEngine else { return }
+        
+        switch engine.currentState {
+        case .idle:
+            updateStatus(.ready)
+        case .ready:
+            updateStatus(.ready)
+        case .warming:
+            updateStatus(.warming)
+        case .listening:
+            updateStatus(.listening)
+        case .processing:
+            updateStatus(.processing)
+        case .error:
+            updateStatus(.error)
         }
     }
     
@@ -441,8 +482,18 @@ extension ComponentManager: DictationEngineDelegate {
     }
     
     func dictationEngine(_ engine: DictationEngine, didEncounterError error: Error) {
-        updateStatus(.error)
-        delegate?.componentManager(self, didEncounterError: error)
+        // Only show error status if it's not an auto-retry situation
+        let errorDescription = error.localizedDescription.lowercased()
+        let isAudioEngineError = errorDescription.contains("audio") || errorDescription.contains("10877")
+        
+        if isAudioEngineError && !engine.isSystemReady {
+            // This is likely a cold start issue being handled by auto-retry
+            print("🔄 Audio engine issue detected - auto-retry will handle this")
+            updateStatus(.processing)  // Show processing instead of error
+        } else {
+            updateStatus(.error)
+            delegate?.componentManager(self, didEncounterError: error)
+        }
     }
 }
 

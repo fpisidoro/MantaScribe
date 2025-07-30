@@ -8,7 +8,7 @@ class MenuBarController: NSObject {
     // MARK: - Types
     
     enum Status {
-        case ready, listening, processing, sending, success, error
+        case ready, warming, listening, processing, sending, success, error
     }
     
     // MARK: - Delegate Protocol
@@ -294,6 +294,27 @@ class MenuBarController: NSObject {
             }
         }
         return nil
+    }
+    
+    // MARK: - Status Information
+    
+    private func statusInfo(for status: Status) -> (icon: String, title: String) {
+        switch status {
+        case .ready:
+            return ("🎤", "Ready for Dictation (Right Option)")
+        case .warming:
+            return ("🔥", "Audio Engine Warming Up...")
+        case .listening:
+            return ("🔴", "Listening... (Right Option to stop)")
+        case .processing:
+            return ("⚡", "Processing Speech...")
+        case .sending:
+            return ("📤", "Sending Text...")
+        case .success:
+            return ("✅", "Text Sent Successfully")
+        case .error:
+            return ("❌", "Error - Try Again")
+        }
     }
     
     // MARK: - Menu Actions
