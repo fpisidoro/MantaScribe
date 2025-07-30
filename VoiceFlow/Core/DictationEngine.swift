@@ -361,17 +361,36 @@ class DictationEngine: NSObject {
         
         print("🎤 Starting recognition task and waiting for readiness...")
         
+        // Create a semaphore to wait for recognition service readiness
+        let recognitionReadySemaphore = DispatchSemaphore(value: 0)
+        var recognitionTaskReady = false
+        
         // Create recognition task
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+            
+            // Signal that recognition service is ready on first callback
+            if !recognitionTaskReady {
+                recognitionTaskReady = true
+                print("🎤 📡 Recognition service first callback - service is ready")
+                recognitionReadySemaphore.signal()
+            }
+            
+            // Process all callbacks normally
             self?.handleRecognitionCallback(result: result, error: error)
         }
         
-        // CRITICAL: Wait for the recognition service to be ready
-        // Small delay to ensure the recognition task is fully initialized
-        // before we start sending audio buffers
-        Thread.sleep(forTimeInterval: 0.2)
+        // Wait for the recognition service to be ready (first callback)
+        // Timeout after 2 seconds to prevent hanging
+        let timeout = DispatchTime.now() + .seconds(2)
+        let result = recognitionReadySemaphore.wait(timeout: timeout)
         
-        print("🎤 ✅ Recognition task ready - speech service initialized")
+        switch result {
+        case .success:
+            print("🎤 ✅ Recognition service confirmed ready via callback")
+        case .timedOut:
+            print("🎤 ⚠️ Recognition service timeout - proceeding anyway")
+            // Don't throw error - proceed with audio capture
+        }
     }
     
     private func startRecognitionTask() {
