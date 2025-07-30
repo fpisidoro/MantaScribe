@@ -91,19 +91,29 @@ class DictationEngine: NSObject {
     // MARK: - System Readiness Check
     
     private func isSystemReady() -> Bool {
-        // Quick readiness check
+        // Quick speech recognizer check
         guard let speechRecognizer = speechRecognizer,
               speechRecognizer.isAvailable else {
             print("⚠️ Speech recognizer not available")
             return false
         }
         
-        // Try creating a recognition request - this will fail fast if system is cold
+        // REAL TEST: Can we actually start audio capture?
         do {
-            let testRequest = SFSpeechAudioBufferRecognitionRequest()
-            testRequest.shouldReportPartialResults = false
-            // If we can create it successfully, system is likely ready
-            print("✅ System readiness check passed")
+            let testEngine = AVAudioEngine()
+            let inputNode = testEngine.inputNode
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            
+            // Try to install tap and start - this will fail if system is cold
+            inputNode.installTap(onBus: 0, bufferSize: 512, format: recordingFormat) { _, _ in }
+            testEngine.prepare()
+            try testEngine.start()
+            
+            // If we got here, system is actually ready
+            testEngine.stop()
+            inputNode.removeTap(onBus: 0)
+            
+            print("✅ System readiness check passed (audio engine test)")
             return true
         } catch {
             print("⚠️ System readiness check failed: \(error.localizedDescription)")
