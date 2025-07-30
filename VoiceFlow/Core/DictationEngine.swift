@@ -224,7 +224,7 @@ class DictationEngine: NSObject {
         self.smartTextCoordinator = coordinator
     }
     
-    /// Start dictation with Core Audio
+    /// Start dictation with Core Audio and automatic retry for first-press reliability
     func startDictation() {
         print("🎤 ═══ START DICTATION REQUEST ═══")
         print("🎤 Current state: \(state), isActivelyRecording: \(isActivelyRecording)")
@@ -239,9 +239,41 @@ class DictationEngine: NSObject {
         do {
             try performCoreAudioStart()
             print("🎤 ✅ Core Audio dictation started successfully in \(dictationMode) mode")
+            
+            // Set up automatic retry timer for first-press reliability
+            // If no speech results after 3 seconds, automatically retry once
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                self.checkFirstPressReliability()
+            }
+            
         } catch {
             print("❌ Failed to start Core Audio dictation: \(error)")
             handleError(DictationError.coreAudioFailure(error))
+        }
+    }
+    
+    /// Check if first press failed and automatically retry transparently
+    private func checkFirstPressReliability() {
+        // Only check if still recording and no results received
+        guard isActivelyRecording && !hasReceivedAnyResults && !userRequestedStop else {
+            return
+        }
+        
+        print("🎤 🔄 First-press auto-retry: No speech results detected after 3s - performing transparent retry")
+        
+        // Stop current attempt
+        performCleanStop()
+        
+        // Brief pause
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            // Retry automatically (user won't notice)
+            do {
+                try self.performCoreAudioStart()
+                print("🎤 ✅ Auto-retry successful - second attempt should work")
+            } catch {
+                print("❌ Auto-retry failed: \(error)")
+                self.handleError(DictationError.coreAudioFailure(error))
+            }
         }
     }
     
@@ -286,18 +318,17 @@ class DictationEngine: NSObject {
     private func performCoreAudioStart() throws {
         setState(.listening)
         
-        // Setup speech recognition FIRST
+        // Setup speech recognition
         try setupRecognitionRequest()
-        
-        // CRITICAL: Start speech recognition task BEFORE audio capture
-        // This ensures the recognition service is ready when audio starts flowing
-        try startRecognitionTaskAndWait()
         
         // Create Core Audio queue
         try createCoreAudioQueue()
         
-        // Start Core Audio recording ONLY after recognition is ready
+        // Start Core Audio recording
         try startCoreAudioRecording()
+        
+        // Start speech recognition task
+        startRecognitionTask()
         
         // Mark as actively recording
         isActivelyRecording = true
@@ -308,7 +339,7 @@ class DictationEngine: NSObject {
         
         // Notify delegate
         delegate?.dictationEngineDidStart(self)
-        print("🎤 Core Audio recording started successfully WITH PROPER TIMING")
+        print("🎤 Core Audio recording started successfully")
     }
     
     private func startCoreAudioRecording() throws {
@@ -350,47 +381,6 @@ class DictationEngine: NSObject {
         }
         
         print("🎤 Speech recognition request configured with Core Audio input")
-    }
-    
-    private func startRecognitionTaskAndWait() throws {
-        guard let speechRecognizer = speechRecognizer,
-              let recognitionRequest = recognitionRequest else {
-            print("❌ Cannot start recognition - missing components")
-            throw DictationError.recognitionRequestCreationFailed
-        }
-        
-        print("🎤 Starting recognition task and waiting for readiness...")
-        
-        // Create a semaphore to wait for recognition service readiness
-        let recognitionReadySemaphore = DispatchSemaphore(value: 0)
-        var recognitionTaskReady = false
-        
-        // Create recognition task
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            
-            // Signal that recognition service is ready on first callback
-            if !recognitionTaskReady {
-                recognitionTaskReady = true
-                print("🎤 📡 Recognition service first callback - service is ready")
-                recognitionReadySemaphore.signal()
-            }
-            
-            // Process all callbacks normally
-            self?.handleRecognitionCallback(result: result, error: error)
-        }
-        
-        // Wait for the recognition service to be ready (first callback)
-        // Timeout after 2 seconds to prevent hanging
-        let timeout = DispatchTime.now() + .seconds(2)
-        let result = recognitionReadySemaphore.wait(timeout: timeout)
-        
-        switch result {
-        case .success:
-            print("🎤 ✅ Recognition service confirmed ready via callback")
-        case .timedOut:
-            print("🎤 ⚠️ Recognition service timeout - proceeding anyway")
-            // Don't throw error - proceed with audio capture
-        }
     }
     
     private func startRecognitionTask() {
