@@ -348,7 +348,7 @@ fileprivate class ComponentManager: NSObject {
             self.updateStatusFromDictationEngine()
             
             // Stop monitoring once system is ready
-            if self.dictationEngine.isSystemReady {
+            if self.dictationEngine.isReady {
                 timer.invalidate()
                 print("🔥 Status monitoring stopped - system ready")
             }
@@ -426,8 +426,6 @@ fileprivate class ComponentManager: NSObject {
             updateStatus(.ready)
         case .ready:
             updateStatus(.ready)
-        case .warming:
-            updateStatus(.warming)
         case .listening:
             updateStatus(.listening)
         case .processing:
@@ -486,7 +484,7 @@ extension ComponentManager: DictationEngineDelegate {
         let errorDescription = error.localizedDescription.lowercased()
         let isAudioEngineError = errorDescription.contains("audio") || errorDescription.contains("10877")
         
-        if isAudioEngineError && !engine.isSystemReady {
+        if isAudioEngineError && !engine.isReady {
             // This is likely a cold start issue being handled by auto-retry
             print("🔄 Audio engine issue detected - auto-retry will handle this")
             updateStatus(.processing)  // Show processing instead of error
