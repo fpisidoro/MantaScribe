@@ -152,6 +152,12 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Mode set to \(mode)")
     }
     
+    /// Update the dictation mode even while recording (for push-to-talk detection)
+    func updateDictationMode(_ mode: DictationMode) {
+        dictationMode = mode
+        print("🎤 DictationEngine: Mode updated to \(mode) (mid-session)")
+    }
+    
     func updatePerformanceMode(_ smartModeEnabled: Bool) {
         processingMode = smartModeEnabled ? .smart : .fast
         print("🎤 DictationEngine: Processing mode set to \(processingMode)")

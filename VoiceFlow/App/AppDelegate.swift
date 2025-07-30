@@ -454,6 +454,8 @@ extension ComponentManager: HotkeyManagerDelegate {
             delegate?.componentManagerDidRequestToggleDictation(self)
             
         case .stopDictation:
+            // Update to push-to-talk mode when detected during session
+            dictationEngine.updateDictationMode(.pushToTalk)
             delegate?.componentManagerDidRequestToggleDictation(self)
         }
     }
