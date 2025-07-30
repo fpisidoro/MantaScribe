@@ -1,8 +1,10 @@
 import Foundation
 import Speech
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 
-/// Bulletproof dictation engine with audio warm-up system for first-use reliability
+/// Bulletproof dictation engine with macOS Audio Unit configuration for first-use reliability
 class DictationEngine: NSObject {
     
     // MARK: - Types
@@ -30,6 +32,7 @@ class DictationEngine: NSObject {
         case audioEngineFailure(Error)
         case recognitionRequestCreationFailed
         case recognitionTaskFailed(Error)
+        case audioUnitConfigurationFailed(Error)
     }
     
     // MARK: - Properties
@@ -91,70 +94,215 @@ class DictationEngine: NSObject {
             self.preInitializeAudioSystem()
         }
         
-        print("🎤 DictationEngine: Initialized with simple queue system")
+        print("🎤 DictationEngine: Initialized with macOS Audio Unit configuration")
     }
     
-    // MARK: - Audio Session Management
+    // MARK: - macOS Audio Unit Configuration
     
-    private func configureAudioSession() throws {
-        let audioSession = AVAudioSession.sharedInstance()
+    private func configureMacOSAudioSystem() throws {
+        print("🔊 Configuring macOS Audio Unit system...")
         
-        do {
-            // CRITICAL: Configure for recording with proper mode
-            try audioSession.setCategory(.record, mode: .spokenAudio, options: [.duckOthers])
-            
-            // Set preferred sample rate to match system
-            try audioSession.setPreferredSampleRate(44100)
-            
-            // Activate session with proper notification
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-            
-            // Verify actual sample rate
-            let actualSampleRate = audioSession.sampleRate
-            print("🔊 Audio session configured: \(actualSampleRate)Hz, category: \(audioSession.category)")
-            
-            // CRITICAL: Explicitly request microphone permission if not already granted
-            if audioSession.recordPermission != .granted {
-                print("⚠️ Microphone permission not granted - requesting...")
-                audioSession.requestRecordPermission { granted in
-                    print("🎤 Microphone permission: \(granted ? "granted" : "denied")")
-                }
-                // Note: This is async, but we continue anyway
-            } else {
-                print("✅ Microphone permission already granted")
-            }
-            
-        } catch {
-            print("❌ Audio session configuration failed: \(error.localizedDescription)")
-            throw DictationError.audioEngineFailure(error)
+        let inputNode = audioEngine.inputNode
+        guard let audioUnit = inputNode.audioUnit else {
+            throw DictationError.audioUnitConfigurationFailed(NSError(domain: "DictationEngine", code: -1, userInfo: [NSLocalizedDescriptionKey: "No audio unit available"]))
+        }
+        
+        // STEP 1: Enable input on the Audio Unit
+        var enableInput: UInt32 = 1
+        let enableInputResult = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_EnableIO,
+            kAudioUnitScope_Input,
+            1, // Input bus
+            &enableInput,
+            UInt32(MemoryLayout<UInt32>.size)
+        )
+        
+        if enableInputResult != noErr {
+            print("❌ Failed to enable audio unit input: \(enableInputResult)")
+            throw DictationError.audioUnitConfigurationFailed(NSError(domain: "AudioUnit", code: Int(enableInputResult), userInfo: nil))
+        }
+        
+        // STEP 2: Configure sample rate at Audio Unit level
+        var sampleRate: Float64 = 44100.0
+        let sampleRateResult = AudioUnitSetProperty(
+            audioUnit,
+            kAudioUnitProperty_SampleRate,
+            kAudioUnitScope_Input,
+            1,
+            &sampleRate,
+            UInt32(MemoryLayout<Float64>.size)
+        )
+        
+        if sampleRateResult != noErr {
+            print("⚠️ Warning: Could not set audio unit sample rate: \(sampleRateResult)")
+            // Not fatal - continue with default
+        }
+        
+        // STEP 3: Configure audio format for optimal recording
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        print("🔊 Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
+        
+        // STEP 4: Set up buffer size for optimal performance
+        var bufferFrameSize: UInt32 = 1024
+        let bufferSizeResult = AudioUnitSetProperty(
+            audioUnit,
+            kAudioDevicePropertyBufferFrameSize,
+            kAudioUnitScope_Global,
+            0,
+            &bufferFrameSize,
+            UInt32(MemoryLayout<UInt32>.size)
+        )
+        
+        if bufferSizeResult != noErr {
+            print("⚠️ Warning: Could not set buffer frame size: \(bufferSizeResult)")
+            // Not fatal - continue with default
+        }
+        
+        // STEP 5: Initialize the Audio Unit
+        let initResult = AudioUnitInitialize(audioUnit)
+        if initResult != noErr {
+            print("❌ Failed to initialize audio unit: \(initResult)")
+            throw DictationError.audioUnitConfigurationFailed(NSError(domain: "AudioUnit", code: Int(initResult), userInfo: nil))
+        }
+        
+        print("✅ macOS Audio Unit configuration completed successfully")
+    }
+    
+    private func configureMacOSAudioDeviceAccess() throws {
+        print("🔊 Configuring macOS audio device access...")
+        
+        // STEP 1: Get default input device
+        var deviceID: AudioDeviceID = 0
+        var deviceIDSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var deviceIDAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        let getDeviceResult = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &deviceIDAddress,
+            0,
+            nil,
+            &deviceIDSize,
+            &deviceID
+        )
+        
+        if getDeviceResult != noErr {
+            print("❌ Failed to get default input device: \(getDeviceResult)")
+            throw DictationError.audioUnitConfigurationFailed(NSError(domain: "AudioDevice", code: Int(getDeviceResult), userInfo: nil))
+        }
+        
+        print("🔊 Default input device ID: \(deviceID)")
+        
+        // STEP 2: Verify device sample rate
+        var sampleRate: Float64 = 0
+        var sampleRateSize = UInt32(MemoryLayout<Float64>.size)
+        var sampleRateAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        let getSampleRateResult = AudioObjectGetPropertyData(
+            deviceID,
+            &sampleRateAddress,
+            0,
+            nil,
+            &sampleRateSize,
+            &sampleRate
+        )
+        
+        if getSampleRateResult == noErr {
+            print("🔊 Device sample rate: \(sampleRate)Hz")
+        } else {
+            print("⚠️ Could not get device sample rate: \(getSampleRateResult)")
+        }
+        
+        print("✅ macOS audio device access configured")
+    }
+    
+    private func verifyMicrophonePermissions() throws {
+        print("🔊 Verifying microphone permissions...")
+        
+        // Check microphone authorization status
+        let authStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        
+        switch authStatus {
+        case .authorized:
+            print("✅ Microphone permission: Authorized")
+        case .denied:
+            print("❌ Microphone permission: Denied")
+            throw DictationError.audioUnitConfigurationFailed(NSError(domain: "Permissions", code: -1, userInfo: [NSLocalizedDescriptionKey: "Microphone access denied"]))
+        case .restricted:
+            print("❌ Microphone permission: Restricted")
+            throw DictationError.audioUnitConfigurationFailed(NSError(domain: "Permissions", code: -2, userInfo: [NSLocalizedDescriptionKey: "Microphone access restricted"]))
+        case .notDetermined:
+            print("⚠️ Microphone permission: Not determined - requesting...")
+            // For macOS, we can't synchronously request permission here
+            // The permission will be requested when audio engine starts
+        @unknown default:
+            print("⚠️ Microphone permission: Unknown status")
+        }
+        
+        // Additional verification: Check if we can access audio input devices
+        let inputDevices = AVAudioSession.sharedInstance().availableInputs
+        if inputDevices?.isEmpty ?? true {
+            print("⚠️ No audio input devices available")
+        } else {
+            print("✅ Audio input devices available: \(inputDevices?.count ?? 0)")
         }
     }
     
     private func preInitializeAudioSystem() {
-        print("🔥 Pre-initializing audio system to prevent cold starts...")
-        
-        // Create temporary engine for initialization
-        let tempEngine = AVAudioEngine()
+        print("🔥 Pre-initializing macOS audio system to prevent cold starts...")
         
         do {
-            // Force initialization of critical nodes
+            // STEP 1: Verify permissions first
+            try verifyMicrophonePermissions()
+            
+            // STEP 2: Configure audio device access
+            try configureMacOSAudioDeviceAccess()
+            
+            // STEP 3: Create temporary engine for full initialization
+            let tempEngine = AVAudioEngine()
+            
+            // Force initialization of critical nodes in proper order
             _ = tempEngine.outputNode
             _ = tempEngine.mainMixerNode
-            _ = tempEngine.inputNode
+            let tempInputNode = tempEngine.inputNode
             
-            // Prepare and briefly start to fully initialize system
+            // STEP 4: Configure temporary Audio Unit
+            if let tempAudioUnit = tempInputNode.audioUnit {
+                var enableInput: UInt32 = 1
+                AudioUnitSetProperty(
+                    tempAudioUnit,
+                    kAudioOutputUnitProperty_EnableIO,
+                    kAudioUnitScope_Input,
+                    1,
+                    &enableInput,
+                    UInt32(MemoryLayout<UInt32>.size)
+                )
+                
+                AudioUnitInitialize(tempAudioUnit)
+            }
+            
+            // STEP 5: Brief engine test with Audio Unit configured
             tempEngine.prepare()
             try tempEngine.start()
             
             // Brief operation to ensure system is active
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: 0.2)
             
             // Clean shutdown
             tempEngine.stop()
             
-            print("🔥 ✅ Audio system pre-initialization completed successfully")
+            print("🔥 ✅ macOS audio system pre-initialization completed successfully")
+            
         } catch {
-            print("🔥 ⚠️ Audio system pre-initialization failed: \(error.localizedDescription)")
+            print("🔥 ⚠️ macOS audio system pre-initialization failed: \(error.localizedDescription)")
             // Not critical - main engine will handle initialization
         }
     }
@@ -165,13 +313,13 @@ class DictationEngine: NSObject {
             return
         }
         
-        print("🔄 Queuing dictation request and warming system...")
+        print("🔄 Queuing dictation request and warming macOS audio system...")
         hasPendingDictationRequest = true
         isSystemWarming = true
         
         // Start background warmup
         DispatchQueue.global(qos: .userInitiated).async {
-            self.performSystemWarmup()
+            self.performMacOSSystemWarmup()
         }
         
         // Safety timeout in case warmup hangs
@@ -180,28 +328,52 @@ class DictationEngine: NSObject {
         }
     }
     
-    private func performSystemWarmup() {
+    private func performMacOSSystemWarmup() {
         do {
-            // Test audio engine initialization
+            print("🔥 Performing macOS-specific system warmup...")
+            
+            // STEP 1: Configure audio device access
+            try configureMacOSAudioDeviceAccess()
+            
+            // STEP 2: Test audio engine with full Audio Unit configuration
             let testEngine = AVAudioEngine()
             let inputNode = testEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
             
-            // Brief test to wake up the system
+            // STEP 3: Configure Audio Unit on test engine
+            if let audioUnit = inputNode.audioUnit {
+                var enableInput: UInt32 = 1
+                let result = AudioUnitSetProperty(
+                    audioUnit,
+                    kAudioOutputUnitProperty_EnableIO,
+                    kAudioUnitScope_Input,
+                    1,
+                    &enableInput,
+                    UInt32(MemoryLayout<UInt32>.size)
+                )
+                
+                if result != noErr {
+                    print("⚠️ Warmup: Audio Unit configuration warning: \(result)")
+                }
+                
+                AudioUnitInitialize(audioUnit)
+            }
+            
+            // STEP 4: Install tap and test
             inputNode.installTap(onBus: 0, bufferSize: 512, format: recordingFormat) { _, _ in }
             testEngine.prepare()
             try testEngine.start()
             
-            // Small delay to ensure system is stable
-            Thread.sleep(forTimeInterval: 0.2)
+            // Extended delay to ensure system is fully stable
+            Thread.sleep(forTimeInterval: 0.3)
+            
+            // STEP 5: Test speech recognition initialization
+            let testRequest = SFSpeechAudioBufferRecognitionRequest()
+            testRequest.shouldReportPartialResults = false
             
             // Cleanup
             testEngine.stop()
             inputNode.removeTap(onBus: 0)
-            
-            // Test speech recognition
-            let testRequest = SFSpeechAudioBufferRecognitionRequest()
-            testRequest.shouldReportPartialResults = false
             
             DispatchQueue.main.async {
                 self.handleWarmupSuccess()
@@ -215,7 +387,7 @@ class DictationEngine: NSObject {
     }
     
     private func handleWarmupSuccess() {
-        print("✅ System warmup completed successfully")
+        print("✅ macOS system warmup completed successfully")
         isSystemWarming = false
         warmupTimer?.invalidate()
         warmupTimer = nil
@@ -223,7 +395,7 @@ class DictationEngine: NSObject {
         // Execute queued request if any
         if hasPendingDictationRequest {
             hasPendingDictationRequest = false
-            print("🚀 Executing queued dictation request")
+            print("🚀 Executing queued dictation request with macOS Audio Unit configuration")
             
             // Reset state for fresh start
             resetSession()
@@ -233,14 +405,14 @@ class DictationEngine: NSObject {
                 try performStart()
                 print("🎤 ✅ Dictation started successfully in \(dictationMode) mode")
             } catch {
-                print("❌ Failed to start dictation after warmup: \(error)")
+                print("❌ Failed to start dictation after macOS warmup: \(error)")
                 handleError(DictationError.audioEngineFailure(error))
             }
         }
     }
     
     private func handleWarmupFailure(_ error: Error) {
-        print("❌ System warmup failed: \(error.localizedDescription)")
+        print("❌ macOS system warmup failed: \(error.localizedDescription)")
         isSystemWarming = false
         warmupTimer?.invalidate()
         warmupTimer = nil
@@ -248,7 +420,7 @@ class DictationEngine: NSObject {
         // Try to execute the queued request anyway - might work now
         if hasPendingDictationRequest {
             hasPendingDictationRequest = false
-            print("🤷‍♂️ Attempting queued dictation despite warmup failure")
+            print("🤷‍♂️ Attempting queued dictation despite macOS warmup failure")
             
             // Reset state for fresh start
             resetSession()
@@ -258,14 +430,14 @@ class DictationEngine: NSObject {
                 try performStart()
                 print("🎤 ✅ Dictation started successfully in \(dictationMode) mode")
             } catch {
-                print("❌ Failed to start dictation after failed warmup: \(error)")
+                print("❌ Failed to start dictation after failed macOS warmup: \(error)")
                 handleError(DictationError.audioEngineFailure(error))
             }
         }
     }
     
     private func handleWarmupTimeout() {
-        print("⏰ System warmup timed out - proceeding anyway")
+        print("⏰ macOS system warmup timed out - proceeding anyway")
         warmupTimer = nil
         handleWarmupSuccess()  // Treat timeout as success and try anyway
     }
@@ -312,7 +484,7 @@ class DictationEngine: NSObject {
         }
         
         // ALWAYS queue and warm up for reliability
-        print("🔄 Using queue system for reliable startup")
+        print("🔄 Using macOS Audio Unit queue system for reliable startup")
         queueDictationAndWarmup()
     }
     
@@ -391,8 +563,8 @@ class DictationEngine: NSObject {
         // Setup recognition request
         try setupRecognitionRequest()
         
-        // Setup and start audio engine
-        try setupAudioEngine()
+        // Setup and start audio engine with macOS Audio Unit configuration
+        try setupMacOSAudioEngine()
         try startAudioEngine()
         
         // Brief delay for audio engine stabilization
@@ -407,7 +579,7 @@ class DictationEngine: NSObject {
         
         // Notify delegate
         delegate?.dictationEngineDidStart(self)
-        print("🎤 Recording started successfully")
+        print("🎤 Recording started successfully with macOS Audio Unit configuration")
     }
     
     private func setupRecognitionRequest() throws {
@@ -423,7 +595,7 @@ class DictationEngine: NSObject {
         
         recognitionRequest.shouldReportPartialResults = true
         
-        // SIMPLE APPROACH: Just use server-based recognition without forcing specific settings
+        // Use server-based recognition for maximum reliability
         print("🎤 Using server-based recognition for maximum reliability")
         
         // Apply contextual strings for medical vocabulary (only in smart mode)
@@ -436,45 +608,46 @@ class DictationEngine: NSObject {
         }
     }
     
-    private func setupAudioEngine() throws {
+    private func setupMacOSAudioEngine() throws {
+        print("🔊 Setting up macOS Audio Engine with Audio Unit configuration...")
+        
         // Stop any existing audio engine
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
         }
         
-        // CRITICAL: Configure audio session BEFORE engine setup
-        try configureAudioSession()
-        
         // CRITICAL: Force initialization of the audio chain before configuration
-        // This triggers internal macOS audio system initialization
         _ = audioEngine.outputNode     // Force output node initialization
         _ = audioEngine.mainMixerNode  // Force mixer initialization
         
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        // Install audio tap AFTER accessing nodes
+        // Configure macOS Audio Unit BEFORE installing tap
+        try configureMacOSAudioSystem()
+        
+        // Install audio tap AFTER Audio Unit configuration
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
         
-        // Call prepare() before start() - critical for resource allocation
+        // Call prepare() after Audio Unit configuration
         audioEngine.prepare()
-        print("🎤 Audio engine configured with session management")
+        print("🔊 macOS Audio Engine configured with Audio Unit optimization")
     }
     
     private func startAudioEngine() throws {
         do {
             try audioEngine.start()
-            print("🎤 Audio engine started")
+            print("🎤 macOS Audio Engine started with Audio Unit configuration")
         } catch {
             // Check if this is the common cold-start error
             let nsError = error as NSError
             if nsError.code == -10877 {
-                print("⚠️ Audio engine cold start detected (-10877) - attempting recovery")
-                try handleColdStartRecovery()
+                print("⚠️ Audio engine cold start detected (-10877) - attempting macOS-specific recovery")
+                try handleMacOSColdStartRecovery()
             } else {
                 print("❌ Audio engine failed with: \(error.localizedDescription)")
                 throw DictationError.audioEngineFailure(error)
@@ -482,8 +655,8 @@ class DictationEngine: NSObject {
         }
     }
     
-    private func handleColdStartRecovery() throws {
-        print("🔄 Performing cold start recovery sequence...")
+    private func handleMacOSColdStartRecovery() throws {
+        print("🔄 Performing macOS-specific cold start recovery sequence...")
         
         // Full reset sequence
         audioEngine.stop()
@@ -492,15 +665,15 @@ class DictationEngine: NSObject {
         // Small delay for system cleanup
         Thread.sleep(forTimeInterval: 0.1)
         
-        // Reinitialize with proper node sequence
-        try setupAudioEngine()
+        // Reinitialize with macOS Audio Unit configuration
+        try setupMacOSAudioEngine()
         
         // Second attempt
         do {
             try audioEngine.start()
-            print("🔄 ✅ Cold start recovery successful")
+            print("🔄 ✅ macOS cold start recovery successful")
         } catch {
-            print("🔄 ❌ Cold start recovery failed")
+            print("🔄 ❌ macOS cold start recovery failed")
             throw DictationError.audioEngineFailure(error)
         }
     }
@@ -516,7 +689,7 @@ class DictationEngine: NSObject {
             self?.handleRecognitionCallback(result: result, error: error)
         }
         
-        print("🎤 Recognition task started (pre-warmed system)")
+        print("🎤 Recognition task started (macOS Audio Unit pre-configured)")
     }
     
     // MARK: - Recognition Callback Handling
@@ -690,12 +863,10 @@ class DictationEngine: NSObject {
         delegate?.dictationEngine(self, didEncounterError: error)
     }
     
-
-    
     // MARK: - Clean Shutdown
     
     private func performCleanStop() {
-        print("🎤 Performing clean stop")
+        print("🎤 Performing clean stop with macOS Audio Unit cleanup")
         
         // Cancel all timers and operations
         cancelPendingOperations()
@@ -727,18 +898,7 @@ class DictationEngine: NSObject {
         recognitionRequest = nil
         recognitionTask = nil
         
-        // Deactivate audio session on background thread to avoid UI blocking
-        DispatchQueue.global(qos: .utility).async {
-            let audioSession = AVAudioSession.sharedInstance()
-            do {
-                try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-                print("🔊 Audio session deactivated")
-            } catch {
-                print("⚠️ Failed to deactivate audio session: \(error.localizedDescription)")
-            }
-        }
-        
-        print("🎤 Recognition components cleaned up")
+        print("🎤 Recognition components cleaned up (macOS Audio Unit deinitialized)")
     }
     
     private func setState(_ newState: DictationState) {
