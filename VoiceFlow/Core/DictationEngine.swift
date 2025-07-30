@@ -115,17 +115,9 @@ class DictationEngine: NSObject {
             throw DictationError.audioEngineFailure(NSError(domain: "AudioFormat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get recording format"]))
         }
         
-        // Use optimized buffer size for better performance
-        let bufferSize: AVAudioFrameCount = 512
-        print("🔊 Using buffer size: \(bufferSize)")
-        
-        inputNode?.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
+        inputNode?.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
-        
-        // Log audio format for debugging
-        let sampleRate = format.sampleRate
-        print("🔊 Audio format: \(format.channelCount) channels, \(sampleRate) Hz")
         
         audioEngine.prepare()
         print("✅ AVAudioEngine setup completed")
@@ -189,177 +181,106 @@ class DictationEngine: NSObject {
         }
     }
     
-    // MARK: - Optimized Microphone Warm-Up Implementation
-    
-    /// Initialize microphone and speech recognition on app launch with optimized retry mechanism
+    /// Initialize microphone and speech recognition on app launch to ensure first-press reliability
+    /// Enhanced with retry mechanism for Error -10877
     private func warmUpMicrophone() {
-        print("🎵 Starting optimized microphone initialization...")
+        print("🎵 Initializing microphone and speech recognition service...")
         
-        // Check permissions first
-        guard checkPermissions() else {
+        // Check if microphone permission is available
+        let microphoneStatus = AVAudioApplication.shared.recordPermission
+        print("🎵 Microphone permission status: \(microphoneStatus.rawValue)")
+        
+        // Check if speech recognition is available
+        let speechAvailable = SFSpeechRecognizer.authorizationStatus() == .authorized
+        print("🎵 Speech recognition authorized: \(speechAvailable)")
+        
+        guard microphoneStatus == .granted && speechAvailable else {
             print("🎵 Permissions not available - marking as initialized anyway")
             isSystemInitialized = true
             return
         }
         
-        // Use retry mechanism for audio context errors
-        performWarmUpWithRetry(maxAttempts: 3) { [weak self] success in
-            DispatchQueue.main.async {
-                if success {
-                    self?.isSystemInitialized = true
-                    print("✅ Optimized microphone initialization completed successfully!")
-                } else {
-                    print("⚠️ Warm-up failed after retries, but first press will still work")
-                    // Mark as initialized anyway - first press will handle any remaining issues
-                    self?.isSystemInitialized = true
-                }
-                print("🎵 System ready: \(self?.isSystemInitialized ?? false)")
-            }
-        }
+        // Try warm-up with retry for -10877 errors
+        tryWarmUp(attempt: 1)
     }
     
-    /// Check if required permissions are available
-    private func checkPermissions() -> Bool {
-        let microphoneStatus = AVAudioApplication.shared.recordPermission
-        let speechAvailable = SFSpeechRecognizer.authorizationStatus() == .authorized
+    private func tryWarmUp(attempt: Int) {
+        let maxAttempts = 3
+        print("🎵 Warm-up attempt \(attempt)/\(maxAttempts)")
         
-        print("🎵 Microphone permission: \(microphoneStatus.rawValue)")
-        print("🎵 Speech recognition authorized: \(speechAvailable)")
-        
-        return microphoneStatus == .granted && speechAvailable
-    }
-    
-    /// Perform warm-up with intelligent retry mechanism for Error -10877
-    private func performWarmUpWithRetry(maxAttempts: Int, completion: @escaping (Bool) -> Void) {
-        var attempt = 0
-        var startTime = CFAbsoluteTimeGetCurrent()
-        
-        func tryWarmUp() {
-            attempt += 1
-            print("🎵 Warm-up attempt \(attempt)/\(maxAttempts)")
+        do {
+            // Brief microphone activation to initialize system
+            try setupRecognitionRequest()
+            try setupAudioEngine()
+            try startAudioEngine()
             
-            do {
-                // OPTIMIZATION 1: Ensure proper audio context initialization
-                // Force mainMixerNode creation to establish audio graph
-                let _ = audioEngine?.mainMixerNode
+            // Check if audio engine is running
+            print("🎵 AVAudioEngine running: \(audioEngine?.isRunning ?? false)")
+            
+            // Start a very brief recognition task
+            startRecognitionTask()
+            
+            // Check if recognition task is running
+            if let task = recognitionTask {
+                print("🎵 Recognition task state: \(task.state)")
+            } else {
+                print("🎵 Recognition task: not created")
+            }
+            
+            print("🎵 Microphone initialization initiated")
+            
+            // Stop after 0.5 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.completeWarmUp()
+            }
+            
+        } catch let error as NSError {
+            print("⚠️ Microphone initialization attempt \(attempt) failed: \(error.code) - \(error.localizedDescription)")
+            
+            // Retry for Error -10877 (kAudioUnitErr_CannotDoInCurrentContext)
+            if error.code == -10877 && attempt < maxAttempts {
+                print("🎵 Retrying for Error -10877 after render cycle delay...")
                 
-                // OPTIMIZATION 2: Use faster buffer size for quicker initialization
-                try setupRecognitionRequest()
-                try setupAudioEngine()  // Use same method as regular dictation
-                try startAudioEngine()
+                // Clean up before retry
+                cleanupAudioEngine()
+                cleanupRecognition()
                 
-                // OPTIMIZATION 3: Shorter validation period for successful cases
-                print("🎵 Warm-up attempt \(attempt) succeeded - validation started")
-                
-                // Quick validation then cleanup
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-                    print("🎵 Warm-up completed in \(String(format: "%.3f", elapsed))s")
-                    self.completeOptimizedWarmUp()
-                    completion(true)
+                // Retry after next render cycle (0.1s delay)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.tryWarmUp(attempt: attempt + 1)
                 }
-                
-            } catch let error as NSError {
-                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-                print("🎵 Attempt \(attempt) failed after \(String(format: "%.3f", elapsed))s: \(error.code) - \(error.localizedDescription)")
-                self.logWarmUpError(error, attempt: attempt)
-                
-                // OPTIMIZATION 4: Specific handling for Error -10877
-                if error.code == -10877 {
-                    print("🎵 Detected kAudioUnitErr_CannotDoInCurrentContext (-10877)")
-                    
-                    if attempt < maxAttempts {
-                        // Clean up current attempt
-                        self.cleanupAudioEngine()
-                        self.cleanupRecognition()
-                        
-                        // Retry after next render cycle (community recommended delay)
-                        print("🎵 Retrying after render cycle delay...")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            tryWarmUp()
-                        }
-                        return
-                    } else {
-                        print("🎵 Max attempts reached for Error -10877")
-                    }
-                }
-                // OPTIMIZATION 5: Handle other audio engine errors
-                else if error.code == -10868 || error.code == -10851 {
-                    print("🎵 Format/property error detected: \(error.code)")
-                    
-                    if attempt < maxAttempts {
-                        self.cleanupAudioEngine()
-                        self.cleanupRecognition()
-                        
-                        // Longer delay for format-related issues
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            tryWarmUp()
-                        }
-                        return
-                    }
-                }
-                
-                // Max attempts reached or non-recoverable error
-                print("🎵 Warm-up failed: attempts exhausted or non-recoverable error")
-                self.cleanupAudioEngine()
-                self.cleanupRecognition()
-                completion(false)
+            } else {
+                print("🎵 Warm-up failed after \(attempt) attempts or non-recoverable error")
+                // Not critical - first press will still work, just might be slightly slower
+                isSystemInitialized = true
             }
         }
-        
-        // Start the retry process
-        startTime = CFAbsoluteTimeGetCurrent()
-        tryWarmUp()
     }
     
-    /// Clean up warm-up session with performance tracking
-    private func completeOptimizedWarmUp() {
-        print("🎵 Completing optimized warm-up...")
+    private func completeWarmUp() {
+        print("🎵 Completing microphone initialization...")
         
-        // Log final states for debugging
-        let engineRunning = audioEngine?.isRunning ?? false
-        print("🎵 Final states - Engine: \(engineRunning)")
-        
+        // Check final states before shutdown
+        print("🎵 Final AVAudioEngine state: \(audioEngine?.isRunning ?? false)")
         if let task = recognitionTask {
-            print("🎵 Recognition task state: \(task.state)")
+            print("🎵 Final recognition task state: \(task.state)")
+        } else {
+            print("🎵 Final recognition task: not created")
         }
         
-        // OPTIMIZATION: Faster cleanup
+        // Clean shutdown of initialization session
         cleanupAudioEngine()
         cleanupRecognition()
         resetSession()
         
-        print("🎵 ✅ Optimized warm-up cleanup completed")
+        // Mark system as initialized
+        isSystemInitialized = true
+        
+        print("✅ Microphone initialization completed - first press optimized!")
+        print("🎵 System initialized: \(isSystemInitialized)")
     }
     
-    /// Enhanced error logging for warm-up debugging
-    private func logWarmUpError(_ error: Error, attempt: Int) {
-        if let nsError = error as NSError? {
-            let domain = nsError.domain
-            let code = nsError.code
-            let description = nsError.localizedDescription
-            
-            print("🎵 Error details:")
-            print("🎵   Domain: \(domain)")
-            print("🎵   Code: \(code)")
-            print("🎵   Description: \(description)")
-            print("🎵   Attempt: \(attempt)")
-            
-            // Specific diagnostics for known error codes
-            switch code {
-            case -10877:
-                print("🎵   Analysis: Audio context conflict - will retry")
-            case -10868:
-                print("🎵   Analysis: Format not supported - may need format adjustment")
-            case -10851:
-                print("🎵   Analysis: Invalid property value - checking sample rates")
-            case -10863:
-                print("🎵   Analysis: Cannot do in current context (render thread issue)")
-            default:
-                print("🎵   Analysis: Unknown audio error")
-            }
-        }
-    }
+
     
     /// Stop dictation
     func stopDictation() {
