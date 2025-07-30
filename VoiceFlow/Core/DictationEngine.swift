@@ -59,6 +59,7 @@ class DictationEngine: NSObject {
     private var isActivelyRecording = false
     private var userRequestedStop = false
     private var isProcessingResults = false
+    private var recognitionTaskFailed = false
     
     // Speech Processing
     private var currentText = ""
@@ -170,14 +171,25 @@ class DictationEngine: NSObject {
     }
     
     private func processAudioBuffer(buffer: AudioQueueBufferRef, packetCount: UInt32) {
-        guard isActivelyRecording, !userRequestedStop else { return }
+        // CRITICAL: Check all conditions that should stop audio processing
+        guard isActivelyRecording, 
+              !userRequestedStop,
+              !recognitionTaskFailed,
+              recognitionRequest != nil,
+              recognitionTask?.state == .running else { 
+            // Stop processing audio if any condition fails
+            return 
+        }
         
         // Convert Core Audio buffer to AVAudioPCMBuffer for speech recognition
         let audioBuffer = convertToAVAudioBuffer(coreAudioBuffer: buffer, packetCount: packetCount)
         
-        // Send to speech recognizer
+        // Send to speech recognizer (only if request still exists)
         DispatchQueue.main.async {
-            self.recognitionRequest?.append(audioBuffer)
+            // Double-check request still exists when executing on main thread
+            if let request = self.recognitionRequest {
+                request.append(audioBuffer)
+            }
         }
     }
     
@@ -240,11 +252,8 @@ class DictationEngine: NSObject {
             try performCoreAudioStart()
             print("🎤 ✅ Core Audio dictation started successfully in \(dictationMode) mode")
             
-            // Set up automatic retry timer for first-press reliability
-            // If no speech results after 3 seconds, automatically retry once
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                self.checkFirstPressReliability()
-            }
+            // REMOVED: Auto-retry logic was causing issues
+            // Let's focus on fixing the core issue instead of working around it
             
         } catch {
             print("❌ Failed to start Core Audio dictation: \(error)")
@@ -252,30 +261,8 @@ class DictationEngine: NSObject {
         }
     }
     
-    /// Check if first press failed and automatically retry transparently
-    private func checkFirstPressReliability() {
-        // Only check if still recording and no results received
-        guard isActivelyRecording && !hasReceivedAnyResults && !userRequestedStop else {
-            return
-        }
-        
-        print("🎤 🔄 First-press auto-retry: No speech results detected after 3s - performing transparent retry")
-        
-        // Stop current attempt
-        performCleanStop()
-        
-        // Brief pause
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            // Retry automatically (user won't notice)
-            do {
-                try self.performCoreAudioStart()
-                print("🎤 ✅ Auto-retry successful - second attempt should work")
-            } catch {
-                print("❌ Auto-retry failed: \(error)")
-                self.handleError(DictationError.coreAudioFailure(error))
-            }
-        }
-    }
+    // REMOVED: checkFirstPressReliability method
+    // Auto-retry was causing issues - focusing on fixing core problem instead
     
     /// Stop dictation
     func stopDictation() {
@@ -477,6 +464,10 @@ class DictationEngine: NSObject {
     private func handleRecognitionError(_ error: Error) {
         print("❌ Recognition error: \(error.localizedDescription)")
         
+        // CRITICAL: Immediately stop Core Audio to prevent endless error loop
+        isActivelyRecording = false
+        recognitionTaskFailed = true
+        
         if !userRequestedStop {
             let errorDescription = error.localizedDescription.lowercased()
             if errorDescription.contains("no speech") && !hasReceivedAnyResults {
@@ -484,7 +475,7 @@ class DictationEngine: NSObject {
                 return
             }
             
-            print("❌ Fatal recognition error - stopping dictation")
+            print("❌ Fatal recognition error - stopping dictation immediately")
             handleError(DictationError.recognitionTaskFailed(error))
             performCleanStop()
         }
@@ -606,6 +597,7 @@ class DictationEngine: NSObject {
         hasReceivedAnyResults = false
         isProcessingResults = false
         isWaitingForPushToTalkResults = false
+        recognitionTaskFailed = false
         print("🎤 Session reset complete")
     }
     
