@@ -94,7 +94,41 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Initialized with simple queue system")
     }
     
-    // MARK: - System Warmup
+    // MARK: - Audio Session Management
+    
+    private func configureAudioSession() throws {
+        let audioSession = AVAudioSession.sharedInstance()
+        
+        do {
+            // CRITICAL: Configure for recording with proper mode
+            try audioSession.setCategory(.record, mode: .spokenAudio, options: [.duckOthers])
+            
+            // Set preferred sample rate to match system
+            try audioSession.setPreferredSampleRate(44100)
+            
+            // Activate session with proper notification
+            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+            
+            // Verify actual sample rate
+            let actualSampleRate = audioSession.sampleRate
+            print("🔊 Audio session configured: \(actualSampleRate)Hz, category: \(audioSession.category)")
+            
+            // CRITICAL: Explicitly request microphone permission if not already granted
+            if audioSession.recordPermission != .granted {
+                print("⚠️ Microphone permission not granted - requesting...")
+                audioSession.requestRecordPermission { granted in
+                    print("🎤 Microphone permission: \(granted ? "granted" : "denied")")
+                }
+                // Note: This is async, but we continue anyway
+            } else {
+                print("✅ Microphone permission already granted")
+            }
+            
+        } catch {
+            print("❌ Audio session configuration failed: \(error.localizedDescription)")
+            throw DictationError.audioEngineFailure(error)
+        }
+    }
     
     private func preInitializeAudioSystem() {
         print("🔥 Pre-initializing audio system to prevent cold starts...")
@@ -409,6 +443,9 @@ class DictationEngine: NSObject {
             audioEngine.inputNode.removeTap(onBus: 0)
         }
         
+        // CRITICAL: Configure audio session BEFORE engine setup
+        try configureAudioSession()
+        
         // CRITICAL: Force initialization of the audio chain before configuration
         // This triggers internal macOS audio system initialization
         _ = audioEngine.outputNode     // Force output node initialization
@@ -425,7 +462,7 @@ class DictationEngine: NSObject {
         
         // Call prepare() before start() - critical for resource allocation
         audioEngine.prepare()
-        print("🎤 Audio engine configured with node pre-initialization")
+        print("🎤 Audio engine configured with session management")
     }
     
     private func startAudioEngine() throws {
@@ -689,6 +726,17 @@ class DictationEngine: NSObject {
         
         recognitionRequest = nil
         recognitionTask = nil
+        
+        // Deactivate audio session on background thread to avoid UI blocking
+        DispatchQueue.global(qos: .utility).async {
+            let audioSession = AVAudioSession.sharedInstance()
+            do {
+                try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+                print("🔊 Audio session deactivated")
+            } catch {
+                print("⚠️ Failed to deactivate audio session: \(error.localizedDescription)")
+            }
+        }
         
         print("🎤 Recognition components cleaned up")
     }
