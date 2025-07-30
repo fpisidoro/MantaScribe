@@ -286,17 +286,18 @@ class DictationEngine: NSObject {
     private func performCoreAudioStart() throws {
         setState(.listening)
         
-        // Setup speech recognition
+        // Setup speech recognition FIRST
         try setupRecognitionRequest()
+        
+        // CRITICAL: Start speech recognition task BEFORE audio capture
+        // This ensures the recognition service is ready when audio starts flowing
+        try startRecognitionTaskAndWait()
         
         // Create Core Audio queue
         try createCoreAudioQueue()
         
-        // Start Core Audio recording
+        // Start Core Audio recording ONLY after recognition is ready
         try startCoreAudioRecording()
-        
-        // Start speech recognition task
-        startRecognitionTask()
         
         // Mark as actively recording
         isActivelyRecording = true
@@ -307,7 +308,7 @@ class DictationEngine: NSObject {
         
         // Notify delegate
         delegate?.dictationEngineDidStart(self)
-        print("🎤 Core Audio recording started successfully")
+        print("🎤 Core Audio recording started successfully WITH PROPER TIMING")
     }
     
     private func startCoreAudioRecording() throws {
@@ -349,6 +350,28 @@ class DictationEngine: NSObject {
         }
         
         print("🎤 Speech recognition request configured with Core Audio input")
+    }
+    
+    private func startRecognitionTaskAndWait() throws {
+        guard let speechRecognizer = speechRecognizer,
+              let recognitionRequest = recognitionRequest else {
+            print("❌ Cannot start recognition - missing components")
+            throw DictationError.recognitionRequestCreationFailed
+        }
+        
+        print("🎤 Starting recognition task and waiting for readiness...")
+        
+        // Create recognition task
+        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+            self?.handleRecognitionCallback(result: result, error: error)
+        }
+        
+        // CRITICAL: Wait for the recognition service to be ready
+        // Small delay to ensure the recognition task is fully initialized
+        // before we start sending audio buffers
+        Thread.sleep(forTimeInterval: 0.2)
+        
+        print("🎤 ✅ Recognition task ready - speech service initialized")
     }
     
     private func startRecognitionTask() {
