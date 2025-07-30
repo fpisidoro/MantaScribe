@@ -1,7 +1,6 @@
 import Foundation
 import Speech
 import AVFoundation
-import AppKit
 
 /// Bulletproof dictation engine with audio warm-up system for first-use reliability
 class DictationEngine: NSObject {
@@ -63,12 +62,6 @@ class DictationEngine: NSObject {
     private var isWaitingForPushToTalkResults = false
     private var pushToTalkTimeoutTimer: Timer?
     
-    // NEW: Speech Service Connection Management
-    private var speechServiceConnected = false
-    private var systemSleepObserver: NSObjectProtocol?
-    private var systemWakeObserver: NSObjectProtocol?
-    private var connectionValidationTimer: Timer?
-    
     // NEW: Speech Recognition Pre-warming System
     private var isSpeechRecognitionWarmedUp = false
     private var speechRecognitionWarmupAttempts = 0
@@ -110,7 +103,6 @@ class DictationEngine: NSObject {
     override init() {
         super.init()
         setupSpeechRecognizer()
-        setupSystemEventMonitoring()
         setState(.ready)
         
         // Start both audio engine and speech recognition warm-up
@@ -120,81 +112,6 @@ class DictationEngine: NSObject {
         }
         
         print("🎤 DictationEngine: Initialized - bulletproof reliability mode")
-    }
-    
-    deinit {
-        removeSystemEventMonitoring()
-    }
-    
-    // MARK: - NEW: System Event Monitoring
-    
-    private func setupSystemEventMonitoring() {
-        // Monitor system sleep events
-        systemSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.willSleepNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.handleSystemWillSleep()
-        }
-        
-        // Monitor system wake events  
-        systemWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.handleSystemDidWake()
-        }
-        
-        print("📉 System sleep/wake monitoring initialized")
-    }
-    
-    private func removeSystemEventMonitoring() {
-        if let observer = systemSleepObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-            systemSleepObserver = nil
-        }
-        
-        if let observer = systemWakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-            systemWakeObserver = nil
-        }
-        
-        connectionValidationTimer?.invalidate()
-        connectionValidationTimer = nil
-    }
-    
-    private func handleSystemWillSleep() {
-        print("📉 😴 System going to sleep - marking speech service as disconnected")
-        speechServiceConnected = false
-        
-        // Stop any active dictation cleanly
-        if isActivelyRecording {
-            print("📉 Stopping active dictation before sleep")
-            stopDictation()
-        }
-    }
-    
-    private func handleSystemDidWake() {
-        print("📉 😊 System woke up - validating speech service connection")
-        speechServiceConnected = false  // Assume disconnected until validated
-        
-        // Validate connection after a brief delay to let system stabilize
-        connectionValidationTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            self?.validateSpeechServiceConnection()
-        }
-    }
-    
-    private func validateSpeechServiceConnection() {
-        print("📉 Validating speech service connection...")
-        
-        // Reset warm-up flags to force re-initialization
-        isSpeechRecognitionWarmedUp = false
-        speechRecognitionWarmupAttempts = 0
-        
-        // Perform speech recognition warm-up to validate/restore connection
-        performSpeechRecognitionWarmup()
     }
     
     // MARK: - NEW: Audio Engine Warm-up System
@@ -333,9 +250,7 @@ class DictationEngine: NSObject {
     
     private func handleSpeechRecognitionWarmupSuccess() {
         isSpeechRecognitionWarmedUp = true
-        speechServiceConnected = true
         print("🧾 ✅ Speech Recognition Warm-up: SUCCESS after \(speechRecognitionWarmupAttempts) attempts")
-        print("🧾 🔗 Speech service connection validated")
         
         // If user tried to start during warmup, start now
         if pendingSpeechRecognitionRequest {
@@ -436,11 +351,7 @@ class DictationEngine: NSObject {
         }
         
         // If speech recognition is warming up, queue the request
-        if !isSpeechRecognitionWarmedUp || !speechServiceConnected {
-            if !speechServiceConnected {
-                print("📉 Speech service not connected - triggering reconnection")
-                validateSpeechServiceConnection()
-            }
+        if !isSpeechRecognitionWarmedUp {
             print("🧾 Speech recognition warming up - queuing start request")
             pendingSpeechRecognitionRequest = true
             return
@@ -518,7 +429,7 @@ class DictationEngine: NSObject {
     }
     
     var isSystemReady: Bool {
-        return isAudioEngineWarmedUp && isSpeechRecognitionWarmedUp && speechServiceConnected && isReady
+        return isAudioEngineWarmedUp && isSpeechRecognitionWarmedUp && isReady
     }
     
     // MARK: - Private Implementation
@@ -551,8 +462,6 @@ class DictationEngine: NSObject {
         recognitionTaskRetryTimer = nil
         speechRecognitionWarmupTimer?.invalidate()
         speechRecognitionWarmupTimer = nil
-        connectionValidationTimer?.invalidate()
-        connectionValidationTimer = nil
         
         // Clear pending requests
         pendingStartRequest = false
