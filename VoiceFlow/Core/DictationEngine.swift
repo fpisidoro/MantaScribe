@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import AppKit
 
 /// Bulletproof dictation engine with audio warm-up system for first-use reliability
 class DictationEngine: NSObject {
