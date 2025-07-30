@@ -144,12 +144,6 @@ class DictationEngine: NSObject {
         print("🎤 DictationEngine: Mode set to \(mode)")
     }
     
-    /// Update the dictation mode even while recording (for push-to-talk detection)
-    func updateDictationMode(_ mode: DictationMode) {
-        dictationMode = mode
-        print("🎤 DictationEngine: Mode updated to \(mode) (mid-session)")
-    }
-    
     func updatePerformanceMode(_ smartModeEnabled: Bool) {
         processingMode = smartModeEnabled ? .smart : .fast
         print("🎤 DictationEngine: Processing mode set to \(processingMode)")
@@ -182,7 +176,6 @@ class DictationEngine: NSObject {
     }
     
     /// Initialize microphone and speech recognition on app launch to ensure first-press reliability
-    /// Enhanced with retry mechanism for Error -10877
     private func warmUpMicrophone() {
         print("🎵 Initializing microphone and speech recognition service...")
         
@@ -193,20 +186,6 @@ class DictationEngine: NSObject {
         // Check if speech recognition is available
         let speechAvailable = SFSpeechRecognizer.authorizationStatus() == .authorized
         print("🎵 Speech recognition authorized: \(speechAvailable)")
-        
-        guard microphoneStatus == .granted && speechAvailable else {
-            print("🎵 Permissions not available - marking as initialized anyway")
-            isSystemInitialized = true
-            return
-        }
-        
-        // Try warm-up with retry for -10877 errors
-        tryWarmUp(attempt: 1)
-    }
-    
-    private func tryWarmUp(attempt: Int) {
-        let maxAttempts = 3
-        print("🎵 Warm-up attempt \(attempt)/\(maxAttempts)")
         
         do {
             // Brief microphone activation to initialize system
@@ -234,26 +213,10 @@ class DictationEngine: NSObject {
                 self.completeWarmUp()
             }
             
-        } catch let error as NSError {
-            print("⚠️ Microphone initialization attempt \(attempt) failed: \(error.code) - \(error.localizedDescription)")
-            
-            // Retry for Error -10877 (kAudioUnitErr_CannotDoInCurrentContext)
-            if error.code == -10877 && attempt < maxAttempts {
-                print("🎵 Retrying for Error -10877 after render cycle delay...")
-                
-                // Clean up before retry
-                cleanupAudioEngine()
-                cleanupRecognition()
-                
-                // Retry after next render cycle (0.1s delay)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    self.tryWarmUp(attempt: attempt + 1)
-                }
-            } else {
-                print("🎵 Warm-up failed after \(attempt) attempts or non-recoverable error")
-                // Not critical - first press will still work, just might be slightly slower
-                isSystemInitialized = true
-            }
+        } catch {
+            print("⚠️ Microphone initialization failed: \(error)")
+            // Not critical - first press will still work, just might be slightly slower
+            isSystemInitialized = true
         }
     }
     
