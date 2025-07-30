@@ -62,7 +62,12 @@ class DictationEngine: NSObject {
     private var isWaitingForPushToTalkResults = false
     private var pushToTalkTimeoutTimer: Timer?
     
-    // NEW: Audio Engine Warm-up System
+    // NEW: Speech Recognition Task Management
+    private var recognitionTaskRetryCount = 0
+    private var maxRecognitionTaskRetries = 2
+    private var recognitionTaskRetryTimer: Timer?
+    
+    // MARK: - NEW: Audio Engine Warm-up System
     private var isAudioEngineWarmedUp = false
     private var warmupAttempts = 0
     private var maxWarmupAttempts = 3
@@ -344,6 +349,7 @@ class DictationEngine: NSObject {
         hasReceivedAnyResults = false
         isProcessingResults = false
         isWaitingForPushToTalkResults = false
+        recognitionTaskRetryCount = 0
         print("🎤 Session reset complete")
     }
     
@@ -355,9 +361,12 @@ class DictationEngine: NSObject {
         autoRetryTimer = nil
         warmupTimer?.invalidate()
         warmupTimer = nil
+        recognitionTaskRetryTimer?.invalidate()
+        recognitionTaskRetryTimer = nil
         
         // Clear pending requests
         pendingStartRequest = false
+        recognitionTaskRetryCount = 0
     }
     
     private func performStart() throws {
@@ -371,7 +380,8 @@ class DictationEngine: NSObject {
         try startAudioEngine()
         
         // Brief delay for audio engine stabilization
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        let initializationDelay = isAudioEngineWarmedUp ? 0.1 : 0.3
+        DispatchQueue.main.asyncAfter(deadline: .now() + initializationDelay) {
             self.startRecognitionTask()
         }
         
@@ -452,11 +462,53 @@ class DictationEngine: NSObject {
             return
         }
         
+        // Add longer stabilization delay for first-time reliability
+        let stabilizationDelay = recognitionTaskRetryCount == 0 ? 0.3 : 0.1
+        
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             self?.handleRecognitionCallback(result: result, error: error)
         }
         
-        print("🎤 Recognition task started")
+        print("🎤 Recognition task started (attempt \(recognitionTaskRetryCount + 1), delay: \(stabilizationDelay)s)")
+        
+        // Set up monitoring for recognition task health
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.monitorRecognitionTaskHealth()
+        }
+    }
+    
+    private func monitorRecognitionTaskHealth() {
+        // If we haven't received any results after 2 seconds and we're still actively recording
+        guard isActivelyRecording && !hasReceivedAnyResults && !userRequestedStop else {
+            return
+        }
+        
+        print("🔄 Recognition task health check: No results received, checking for retry...")
+        
+        // Only retry for push-to-talk mode if we haven't received results
+        if dictationMode == .pushToTalk && recognitionTaskRetryCount < maxRecognitionTaskRetries {
+            print("🔄 Restarting recognition task for better reliability (attempt \(recognitionTaskRetryCount + 1))")
+            restartRecognitionTask()
+        }
+    }
+    
+    private func restartRecognitionTask() {
+        recognitionTaskRetryCount += 1
+        
+        // Clean up current task
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        
+        // Restart with same request
+        if let speechRecognizer = speechRecognizer,
+           let recognitionRequest = recognitionRequest {
+            
+            recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+                self?.handleRecognitionCallback(result: result, error: error)
+            }
+            
+            print("🔄 Recognition task restarted (retry \(recognitionTaskRetryCount)/\(maxRecognitionTaskRetries))")
+        }
     }
     
     // MARK: - Recognition Callback Handling

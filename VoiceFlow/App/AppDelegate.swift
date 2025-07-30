@@ -338,13 +338,13 @@ fileprivate class ComponentManager: NSObject {
     
     private func startStatusMonitoring() {
         // Monitor DictationEngine status during warm-up phase
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             guard let self = self else {
                 timer.invalidate()
                 return
             }
             
-            // Update status based on current engine state
+            // Update status based on current engine state (less frequent to reduce flickering)
             self.updateStatusFromDictationEngine()
             
             // Stop monitoring once system is ready
