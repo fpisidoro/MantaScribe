@@ -321,7 +321,6 @@ class DictationEngine: NSObject {
         hasReceivedAnyResults = false
         isProcessingResults = false
         isWaitingForPushToTalkResults = false
-        recognitionTaskRetryCount = 0
         print("🎤 Session reset complete")
     }
     
@@ -348,7 +347,7 @@ class DictationEngine: NSObject {
         try startAudioEngine()
         
         // Brief delay for audio engine stabilization
-        let initializationDelay = isAudioEngineWarmedUp ? 0.1 : 0.3
+        let initializationDelay: TimeInterval = 0.1
         DispatchQueue.main.asyncAfter(deadline: .now() + initializationDelay) {
             self.startRecognitionTask()
         }
