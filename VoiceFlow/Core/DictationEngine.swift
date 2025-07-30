@@ -200,8 +200,11 @@ class DictationEngine: NSObject {
             startRecognitionTask()
             
             // Check if recognition task is running
-            let taskState = recognitionTask?.state ?? .cancelled
-            print("🎵 Recognition task state: \(taskState.rawValue)")
+            if let task = recognitionTask {
+                print("🎵 Recognition task state: \(task.state)")
+            } else {
+                print("🎵 Recognition task: not created")
+            }
             
             print("🎵 Microphone initialization initiated")
             
@@ -221,7 +224,11 @@ class DictationEngine: NSObject {
         
         // Check final states before shutdown
         print("🎵 Final AVAudioEngine state: \(audioEngine?.isRunning ?? false)")
-        print("🎵 Final recognition task state: \(recognitionTask?.state.rawValue ?? -1)")
+        if let task = recognitionTask {
+            print("🎵 Final recognition task state: \(task.state)")
+        } else {
+            print("🎵 Final recognition task: not created")
+        }
         
         // Clean shutdown of initialization session
         cleanupAudioEngine()
