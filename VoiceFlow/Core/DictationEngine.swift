@@ -54,6 +54,7 @@ class DictationEngine: NSObject {
     private var userRequestedStop = false
     private var isProcessingResults = false
     private var recognitionTaskFailed = false
+    private var isSystemInitialized = false
     
     // Speech Processing
     private var currentText = ""
@@ -178,14 +179,29 @@ class DictationEngine: NSObject {
     private func warmUpMicrophone() {
         print("🎵 Initializing microphone and speech recognition service...")
         
+        // Check if microphone permission is available
+        let microphoneStatus = AVAudioApplication.shared.recordPermission
+        print("🎵 Microphone permission status: \(microphoneStatus.rawValue)")
+        
+        // Check if speech recognition is available
+        let speechAvailable = SFSpeechRecognizer.authorizationStatus() == .authorized
+        print("🎵 Speech recognition authorized: \(speechAvailable)")
+        
         do {
             // Brief microphone activation to initialize system
             try setupRecognitionRequest()
             try setupAudioEngine()
             try startAudioEngine()
             
+            // Check if audio engine is running
+            print("🎵 AVAudioEngine running: \(audioEngine?.isRunning ?? false)")
+            
             // Start a very brief recognition task
             startRecognitionTask()
+            
+            // Check if recognition task is running
+            let taskState = recognitionTask?.state ?? .cancelled
+            print("🎵 Recognition task state: \(taskState.rawValue)")
             
             print("🎵 Microphone initialization initiated")
             
@@ -203,12 +219,20 @@ class DictationEngine: NSObject {
     private func completeWarmUp() {
         print("🎵 Completing microphone initialization...")
         
+        // Check final states before shutdown
+        print("🎵 Final AVAudioEngine state: \(audioEngine?.isRunning ?? false)")
+        print("🎵 Final recognition task state: \(recognitionTask?.state.rawValue ?? -1)")
+        
         // Clean shutdown of initialization session
         cleanupAudioEngine()
         cleanupRecognition()
         resetSession()
         
+        // Mark system as initialized
+        isSystemInitialized = true
+        
         print("✅ Microphone initialization completed - first press optimized!")
+        print("🎵 System initialized: \(isSystemInitialized)")
     }
     
     /// Stop dictation
@@ -245,6 +269,12 @@ class DictationEngine: NSObject {
     
     var isReady: Bool {
         return state == .ready && !isActivelyRecording
+    }
+    
+    var isSystemReady: Bool {
+        return isSystemInitialized && 
+               SFSpeechRecognizer.authorizationStatus() == .authorized &&
+               AVAudioApplication.shared.recordPermission == .granted
     }
     
     // MARK: - AVAudioEngine Implementation
@@ -514,6 +544,7 @@ class DictationEngine: NSObject {
         isProcessingResults = false
         isWaitingForPushToTalkResults = false
         recognitionTaskFailed = false
+        // Note: isSystemInitialized is NOT reset - it's permanent once set
         print("🎤 Session reset complete")
     }
     
