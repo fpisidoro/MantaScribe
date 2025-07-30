@@ -89,6 +89,12 @@ class DictationEngine: NSObject {
         setupSpeechRecognizer()
         setupCoreAudioFormat()
         setState(.ready)
+        
+        // Warm up microphone on app launch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.warmUpMicrophone()
+        }
+        
         print("🎤 DictationEngine: Initialized with Core Audio for professional reliability")
     }
     
@@ -261,8 +267,44 @@ class DictationEngine: NSObject {
         }
     }
     
-    // REMOVED: checkFirstPressReliability method
-    // Auto-retry was causing issues - focusing on fixing core problem instead
+    // MARK: - Microphone Warm-Up
+    
+    /// Warm up microphone and speech recognition service on app launch
+    private func warmUpMicrophone() {
+        print("🎵 Warming up microphone and speech recognition service...")
+        
+        do {
+            // Brief microphone activation to initialize system
+            try setupRecognitionRequest()
+            try createCoreAudioQueue()
+            try startCoreAudioRecording()
+            
+            // Start a very brief recognition task
+            startRecognitionTask()
+            
+            print("🎵 Microphone warm-up initiated")
+            
+            // Stop after 0.5 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.completeWarmUp()
+            }
+            
+        } catch {
+            print("⚠️ Microphone warm-up failed: \(error)")
+            // Not critical - just means first press might need retry
+        }
+    }
+    
+    private func completeWarmUp() {
+        print("🎵 Completing microphone warm-up...")
+        
+        // Clean shutdown of warm-up session
+        cleanupCoreAudio()
+        cleanupRecognition()
+        resetSession()
+        
+        print("✅ Microphone warm-up completed - first press should work!")
+    }
     
     /// Stop dictation
     func stopDictation() {
